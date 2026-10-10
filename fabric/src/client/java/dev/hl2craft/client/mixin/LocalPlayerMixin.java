@@ -14,8 +14,10 @@ abstract class LocalPlayerMixin {
 	@Inject(method = "tick", at = @At("HEAD"), cancellable = true)
 	private void hl2craft$followHost(final CallbackInfo ci) {
 		LocalPlayer self = (LocalPlayer) (Object) this;
-		if (self.isFallFlying()) {
-			self.setOnGround(false);
+		if (self.isFallFlying() || self.getAbilities().flying) {
+			if (self.isFallFlying()) {
+				self.setOnGround(false);
+			}
 			return;
 		}
 		HL2Client.Pose p = HL2Client.currentPose();

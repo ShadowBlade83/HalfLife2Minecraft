@@ -36,7 +36,8 @@ public abstract class BlockCollisionsMixin {
 		}
 		if (context instanceof net.minecraft.world.phys.shapes.EntityCollisionContext entityContext
 			&& entityContext.getEntity() instanceof net.minecraft.world.entity.player.Player player
-			&& !player.isFallFlying()) {
+			&& !player.isFallFlying()
+			&& !player.getAbilities().flying) {
 			return blockShape;
 		}
 		VoxelShape hl2 = HL2Collision.shapeAt(pos);

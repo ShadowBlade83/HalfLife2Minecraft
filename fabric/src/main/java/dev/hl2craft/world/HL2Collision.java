@@ -111,8 +111,17 @@ public final class HL2Collision {
 		return PLACED_BLOCKS.contains(pos);
 	}
 
+	private static final ConcurrentHashMap<Long, Integer> COLUMN_FLOOR_Y = new ConcurrentHashMap<>();
+	private static final ConcurrentHashMap<Long, Integer> CHUNK_FLOOR_Y = new ConcurrentHashMap<>();
+
+	private static long colKey(int x, int z) {
+		return ((long) x << 32) | (z & 0xFFFFFFFFL);
+	}
+
 	private static void clear(int newEpoch) {
 		SHAPES.clear();
+		COLUMN_FLOOR_Y.clear();
+		CHUNK_FLOOR_Y.clear();
 		epoch = newEpoch;
 		pendingClear = true;
 		HL2Craft.LOG.info("HL2Craft: collision cleared (epoch {})", newEpoch);
@@ -222,6 +231,40 @@ public final class HL2Collision {
 			BARRIER_BLOCKS.clear();
 		}
 
+		// Ensure chunks and floor collision remain loaded under all active entities/mobs even when far from player
+		try {
+			int defaultFloorY = (int) Math.floor(player.getY()) - 1;
+			for (net.minecraft.world.entity.Entity ent : level.getAllEntities()) {
+				if (ent == null || ent instanceof net.minecraft.world.entity.player.Player || ent.isRemoved()) {
+					continue;
+				}
+				int ex = ent.getBlockX();
+				int ey = ent.getBlockY();
+				int ez = ent.getBlockZ();
+				int ecx = ex >> 4;
+				int ecz = ez >> 4;
+				if (!level.hasChunk(ecx, ecz)) {
+					level.getChunk(ecx, ecz);
+				}
+				long ck = colKey(ecx, ecz);
+				int chunkFloor = CHUNK_FLOOR_Y.getOrDefault(ck, Math.max(ey - 1, defaultFloorY));
+				for (int dx = -1; dx <= 1; dx++) {
+					for (int dz = -1; dz <= 1; dz++) {
+						int bx = ex + dx;
+						int bz = ez + dz;
+						long col = colKey(bx, bz);
+						if (!COLUMN_FLOOR_Y.containsKey(col)) {
+							int fy = Math.min(ey - 1, chunkFloor);
+							COLUMN_FLOOR_Y.put(col, fy);
+							SHAPES.putIfAbsent(BlockPos.asLong(bx, fy, bz), Shapes.block());
+							SHAPES.putIfAbsent(BlockPos.asLong(bx, fy - 1, bz), Shapes.block());
+						}
+					}
+				}
+			}
+		} catch (Exception ignored) {
+		}
+
 		// Sweep any legacy barrier blocks saved on disk in chunks near the player
 		if ((server.getTickCount() & 19) == 0) {
 			int pcx = player.chunkPosition().x();
@@ -278,10 +321,25 @@ public final class HL2Collision {
 			VoxelShape shape = buildShape(s, e + 16);
 			if (shape != null) {
 				next.put(BlockPos.asLong(x, y, z), shape);
+				COLUMN_FLOOR_Y.put(colKey(x, z), y);
+				CHUNK_FLOOR_Y.put(colKey(x >> 4, z >> 4), y);
 			}
 		}
+
+		// Only refresh blocks inside the newly scanned region so distant chunks with mobs keep their floors & walls!
+		int innerMinX = minX + 1, innerMaxX = maxX - 1;
+		int innerMinY = minY + 1, innerMaxY = maxY - 1;
+		int innerMinZ = minZ + 1, innerMaxZ = maxZ - 1;
+		SHAPES.keySet().removeIf(packed -> {
+			int bx = BlockPos.getX(packed);
+			int by = BlockPos.getY(packed);
+			int bz = BlockPos.getZ(packed);
+			return bx >= innerMinX && bx <= innerMaxX
+				&& by >= innerMinY && by <= innerMaxY
+				&& bz >= innerMinZ && bz <= innerMaxZ
+				&& !next.containsKey(packed);
+		});
 		SHAPES.putAll(next);
-		SHAPES.keySet().retainAll(next.keySet());
 	}
 
 	private static @Nullable VoxelShape buildShape(MemorySegment s, long bitsOff) {

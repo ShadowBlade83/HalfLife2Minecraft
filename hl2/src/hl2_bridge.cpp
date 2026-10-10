@@ -426,7 +426,7 @@ namespace hl2craft
 		float dMovedSq = (pos.x - m_lastScanPos.x)*(pos.x - m_lastScanPos.x) +
 		                 (pos.y - m_lastScanPos.y)*(pos.y - m_lastScanPos.y) +
 		                 (pos.z - m_lastScanPos.z)*(pos.z - m_lastScanPos.z);
-		if (dMovedSq > 40000.0f || (now - m_lastColScanTime > 3000)) {
+		if (dMovedSq > 14400.0f || (now - m_lastColScanTime > 2000)) {
 			m_lastColScanTime = now;
 			m_lastScanPos = pos;
 			ScanCollision(pos);
@@ -516,22 +516,28 @@ namespace hl2craft
 		bool mcScreenOpen = (ms->flags & proto::kMcScreenOpen) != 0;
 		SetGuiOpen(mcScreenOpen);
 
-		// Synchronize Elytra flight / flying from Minecraft -> HL2
+		// Synchronize Elytra flight / Creative flight from Minecraft -> HL2
 		bool mcFlying = (ms->flags & proto::kMcFlying) != 0;
 		if (mcFlying) {
 			if (!m_wasFlying) {
 				m_wasFlying = true;
-				ExecCmd("ent_fire !player addoutput \"gravity 0.05\"");
+				ExecCmd("ent_fire !player addoutput \"gravity 0.0001\"; hl2_normspeed 1; -jump; -duck;");
 			}
 			float sx = (float)ms->x * (float)proto::kUnitsPerBlock;
 			float sy = -(float)ms->z * (float)proto::kUnitsPerBlock;
 			float sz = ((float)ms->y - 64.0f) * (float)proto::kUnitsPerBlock;
-			char flyCmd[128];
-			snprintf(flyCmd, sizeof(flyCmd), "setpos %.2f %.2f %.2f", sx, sy, sz);
+			char flyCmd[256];
+			snprintf(flyCmd, sizeof(flyCmd),
+				"ent_fire !player addoutput \"basevelocity 0 0 0\"; "
+				"ent_fire !player addoutput \"velocity 0 0 0\"; "
+				"setpos %.2f %.2f %.2f",
+				sx, sy, sz);
 			ExecCmd(flyCmd);
 		} else if (m_wasFlying) {
 			m_wasFlying = false;
-			ExecCmd("ent_fire !player addoutput \"gravity 1\"");
+			ExecCmd(m_lastSprinting
+				? "ent_fire !player addoutput \"gravity 1\"; hl2_normspeed 320;"
+				: "ent_fire !player addoutput \"gravity 1\"; hl2_normspeed 190;");
 		} else if (m_unstickActive) {
 			DWORD now = GetTickCount();
 			if (now < m_unstickUntil) {
@@ -778,7 +784,7 @@ namespace hl2craft
 					void *clientClass = ((GetClientClassFn)netVt[2])(networkable);
 					if (clientClass && !IsBadReadPtr(clientClass, sizeof(void*) * 3)) {
 						const char *className = *(const char**)((char*)clientClass + 8);
-						if (IsNpcClass(className)) return false;
+						if (IsNpcClass(className) || IsPropClass(className)) return false;
 					}
 				}
 			}
@@ -790,8 +796,54 @@ namespace hl2craft
 	class CTraceFilterCombat : public ITraceFilter {
 	public:
 		void *pPlayer = nullptr;
+		const std::set<std::tuple<int, int, int>> *pPlacedBlocks = nullptr;
 		virtual bool ShouldHitEntity(void *pEntity, int contentsMask) {
 			if (!pEntity || pEntity == pPlayer) return false;
+			if (pPlacedBlocks && !pPlacedBlocks->empty()) {
+				void *networkable = (char*)pEntity + 8;
+				const char *className = "";
+				if (!IsBadReadPtr(networkable, sizeof(void*))) {
+					void **netVt = *(void***)networkable;
+					if (!IsBadReadPtr(netVt, sizeof(void*) * 3)) {
+						typedef void* (__thiscall *GetClientClassFn)(void*);
+						void *clientClass = ((GetClientClassFn)netVt[2])(networkable);
+						if (clientClass && !IsBadReadPtr(clientClass, sizeof(void*) * 3)) {
+							className = *(const char**)((char*)clientClass + 8);
+						}
+					}
+				}
+				if (IsPropClass(className)) {
+					void *renderable = (char*)pEntity + 4;
+					if (!IsBadReadPtr(renderable, sizeof(void*))) {
+						void **rendVt = *(void***)renderable;
+						if (!IsBadReadPtr(rendVt, sizeof(void*) * 2)) {
+							typedef const float* (__thiscall *GetOriginFn)(void*);
+							const float *org = ((GetOriginFn)rendVt[1])(renderable);
+							if (org && !IsBadReadPtr(org, sizeof(float) * 3)) {
+								int bx = (int)std::floor(org[0] * proto::kMetersPerUnit);
+								int by = (int)std::floor(org[2] * proto::kMetersPerUnit + 64.0);
+								int bz = (int)std::floor(-org[1] * proto::kMetersPerUnit);
+								for (int dy = -1; dy <= 1; ++dy) {
+									for (int dx = -1; dx <= 1; ++dx) {
+										for (int dz = -1; dz <= 1; ++dz) {
+											if (pPlacedBlocks->find({bx + dx, by + dy, bz + dz}) != pPlacedBlocks->end()) {
+												float cbx = (bx + dx + 0.5f) * (float)proto::kUnitsPerBlock;
+												float cby = -(bz + dz + 0.5f) * (float)proto::kUnitsPerBlock;
+												float cbz = (by + dy + 0.5f - 64.0f) * (float)proto::kUnitsPerBlock;
+												if (std::abs(org[0] - cbx) < 22.0f &&
+												    std::abs(org[1] - cby) < 22.0f &&
+												    std::abs(org[2] - cbz) < 22.0f) {
+													return false; // Ignore our invisible placed block collision props!
+												}
+											}
+										}
+									}
+								}
+							}
+						}
+					}
+				}
+			}
 			return true;
 		}
 		virtual int GetTraceType() const { return 0; } // TRACE_EVERYTHING
@@ -851,7 +903,7 @@ namespace hl2craft
 		int minY = centerBy - 14, maxY = centerBy + 14;
 
 		std::vector<proto::ColBlock> blocks;
-		blocks.reserve(kGridSize * kGridSize * 4);
+		blocks.reserve(kGridSize * kGridSize * 5);
 
 		int floorGrid[kGridSize][kGridSize];
 		float floorZGrid[kGridSize][kGridSize];
@@ -868,7 +920,7 @@ namespace hl2craft
 			return; // Safely handled any engine trace exception
 		}
 
-		constexpr unsigned int kStaticWorldMask = 0xB; // CONTENTS_SOLID | CONTENTS_WINDOW | CONTENTS_GRATE (no props or NPCs)
+		constexpr unsigned int kStaticWorldMask = 0x200400B; // MASK_SOLID (brushes, static props, grates, windows)
 
 		// Pass 1: Floor detection
 		for (int ix = 0; ix < kGridSize; ix++) {
@@ -890,7 +942,7 @@ namespace hl2craft
 				if (tr.startsolid) {
 					// Step-up or hill: try starting slightly higher (below doorway height) if that point is in open air
 					float hzHigh = playerPos.z + 82.0f;
-					if (!getPointContents || (getPointContents(m_engineTrace, Vector(hx, hy, hzHigh), nullptr) & kStaticWorldMask) == 0) {
+					if (!getPointContents || (getPointContents(m_engineTrace, Vector(hx, hy, hzHigh), nullptr) & 0xB) == 0) {
 						ray.Init(Vector(hx, hy, hzHigh), Vector(hx, hy, hzEnd));
 						std::memset(&tr, 0, sizeof(tr));
 						traceRay(m_engineTrace, ray, kStaticWorldMask, &filter, &tr);
@@ -917,39 +969,59 @@ namespace hl2craft
 						}
 						blocks.push_back(topBlock);
 
-						// One solid support block directly below floor surface
-						proto::ColBlock subBlock;
-						subBlock.x = bx;
-						subBlock.y = by - 1;
-						subBlock.z = bz;
-						subBlock.pad = 0;
-						for (int l = 0; l < 8; l++) subBlock.bits[l] = 0xFFFFFFFFFFFFFFFFULL;
-						blocks.push_back(subBlock);
+						// Solid support column directly below floor surface so steps/ledges have solid side walls
+						for (int depth = 1; depth <= 3; ++depth) {
+							proto::ColBlock subBlock;
+							subBlock.x = bx;
+							subBlock.y = by - depth;
+							subBlock.z = bz;
+							subBlock.pad = 0;
+							for (int l = 0; l < 8; l++) subBlock.bits[l] = 0xFFFFFFFFFFFFFFFFULL;
+							blocks.push_back(subBlock);
+						}
 					}
 				}
 			}
 		}
 
-		// Pass 2: Actual solid brush walls (verified via getPointContents, never guessed from height steps)
-		if (getPointContents) {
-			for (int ix = 0; ix < kGridSize; ix++) {
-				int bx = minX + ix;
-				for (int iz = 0; iz < kGridSize; iz++) {
-					int bz = minZ + iz;
-					int by = floorGrid[ix][iz];
-					int baseWy = (by != -9999) ? (by + 1) : (centerBy - 1);
-					int topWy = std::min(baseWy + 4, maxY);
+		// Pass 2: Solid brush & static-prop walls (point contents + X/Y cross-rays to catch thin walls and fences)
+		for (int ix = 0; ix < kGridSize; ix++) {
+			int bx = minX + ix;
+			for (int iz = 0; iz < kGridSize; iz++) {
+				int bz = minZ + iz;
+				int by = floorGrid[ix][iz];
+				int baseWy = (by != -9999) ? (by + 1) : (centerBy - 1);
+				int topWy = std::min(baseWy + 3, maxY);
 
-					for (int wy = baseWy; wy <= topWy; wy++) {
-						float cx = (bx + 0.5f) * kBlockUnits;
-						float cy = -(bz + 0.5f) * kBlockUnits;
-						float cz = (wy + 0.5f - (float)kYOffset) * kBlockUnits;
-						if ((getPointContents(m_engineTrace, Vector(cx, cy, cz), nullptr) & kStaticWorldMask) != 0) {
-							proto::ColBlock wb;
-							wb.x = bx; wb.y = wy; wb.z = bz; wb.pad = 0;
-							for (int l = 0; l < 8; l++) wb.bits[l] = 0xFFFFFFFFFFFFFFFFULL;
-							blocks.push_back(wb);
+				for (int wy = baseWy; wy <= topWy; wy++) {
+					float cx = (bx + 0.5f) * kBlockUnits;
+					float cy = -(bz + 0.5f) * kBlockUnits;
+					float cz = (wy + 0.5f - (float)kYOffset) * kBlockUnits;
+					bool hitWall = getPointContents && ((getPointContents(m_engineTrace, Vector(cx, cy, cz), nullptr) & 0xB) != 0);
+					if (!hitWall && wy <= baseWy + 1) {
+						Ray_t rayX;
+						rayX.Init(Vector((bx + 0.1f) * kBlockUnits, cy, cz), Vector((bx + 0.9f) * kBlockUnits, cy, cz));
+						trace_t trX;
+						std::memset(&trX, 0, sizeof(trX));
+						traceRay(m_engineTrace, rayX, kStaticWorldMask, &filter, &trX);
+						if (trX.startsolid || trX.fraction < 1.0f) {
+							hitWall = true;
+						} else {
+							Ray_t rayY;
+							rayY.Init(Vector(cx, -(bz + 0.1f) * kBlockUnits, cz), Vector(cx, -(bz + 0.9f) * kBlockUnits, cz));
+							trace_t trY;
+							std::memset(&trY, 0, sizeof(trY));
+							traceRay(m_engineTrace, rayY, kStaticWorldMask, &filter, &trY);
+							if (trY.startsolid || trY.fraction < 1.0f) {
+								hitWall = true;
+							}
 						}
+					}
+					if (hitWall) {
+						proto::ColBlock wb;
+						wb.x = bx; wb.y = wy; wb.z = bz; wb.pad = 0;
+						for (int l = 0; l < 8; l++) wb.bits[l] = 0xFFFFFFFFFFFFFFFFULL;
+						blocks.push_back(wb);
 					}
 				}
 			}
@@ -1305,10 +1377,12 @@ namespace hl2craft
 						"ent_fire mc_blk_%d_%d_%d addoutput \"effects 80\"; "
 						"ent_fire mc_blk_%d_%d_%d DisableShadow; "
 						"ent_fire mc_blk_%d_%d_%d addoutput \"health 999999\"; "
+						"ent_fire mc_blk_%d_%d_%d addoutput \"takedamage 0\"; "
 						"ent_fire mc_blk_%d_%d_%d DisableMotion; "
 						"ent_fire mc_blk_%d_%d_%d addoutput \"solid 0\"",
 						ibx, iby, ibz,
 						ibx, iby, ibz, sx, sy, sz,
+						ibx, iby, ibz,
 						ibx, iby, ibz,
 						ibx, iby, ibz,
 						ibx, iby, ibz,
@@ -1327,10 +1401,12 @@ namespace hl2craft
 						"ent_fire mc_blk_%d_%d_%d addoutput \"effects 80\"; "
 						"ent_fire mc_blk_%d_%d_%d DisableShadow; "
 						"ent_fire mc_blk_%d_%d_%d addoutput \"health 999999\"; "
+						"ent_fire mc_blk_%d_%d_%d addoutput \"takedamage 0\"; "
 						"ent_fire mc_blk_%d_%d_%d DisableMotion; "
 						"ent_fire mc_blk_%d_%d_%d addoutput \"solid 6\"",
 						ibx, iby, ibz,
 						ibx, iby, ibz, sx, sy, sz,
+						ibx, iby, ibz,
 						ibx, iby, ibz,
 						ibx, iby, ibz,
 						ibx, iby, ibz,
@@ -1385,6 +1461,7 @@ namespace hl2craft
 		trace_t tr;
 		std::memset(&tr, 0, sizeof(tr));
 		CTraceFilterCombat filter;
+		filter.pPlacedBlocks = &m_placedBlocks;
 		if (m_entityList && m_engineClient) {
 			void **evt = *(void***)m_engineClient;
 			typedef int (__thiscall *GetLocalPlayerFn)(void*);
@@ -1417,34 +1494,37 @@ namespace hl2craft
 
 			bool isNpc = IsNpcClass(className);
 			bool isProp = IsPropClass(className);
-			if (isNpc) {
+			if (isNpc || isProp) {
+				Vector hitPos = tr.endpos;
+				float dx = hitPos.x - pos.x;
+				float dy = hitPos.y - pos.y;
+				float dist = std::sqrt(dx * dx + dy * dy);
+				if (dist < 18.0f) {
+					return;
+				}
+				if (dist < 42.0f) {
+					hitPos.x += (dx / dist) * 18.0f;
+					hitPos.y += (dy / dist) * 18.0f;
+				}
+
 				m_ignoreSelfDamageUntil = GetTickCount() + 250;
-				char cmd[128];
-				snprintf(cmd, sizeof(cmd), "ent_fire !picker RemoveHealth %d", dmg);
+				static uint32_t s_meleeCounter = 0;
+				uint32_t hurtId = ++s_meleeCounter;
+				int safeHp = (m_lastSyncedHp > 0) ? m_lastSyncedHp : 100;
+				int clubDmg = isProp ? std::max(dmg, 45) : dmg;
+				char cmd[384];
+				snprintf(cmd, sizeof(cmd),
+					"ent_create point_hurt targetname mc_ml_%u; "
+					"ent_fire mc_ml_%u addoutput \"origin %.2f %.2f %.2f\"; "
+					"ent_fire mc_ml_%u addoutput \"Damage %d\"; "
+					"ent_fire mc_ml_%u addoutput \"DamageRadius 22\"; "
+					"ent_fire mc_ml_%u addoutput \"DamageType 128\"; "
+					"ent_fire mc_ml_%u Hurt; "
+					"ent_fire mc_ml_%u Kill; "
+					"ent_fire !player sethealth %d",
+					hurtId, hurtId, hitPos.x, hitPos.y, hitPos.z,
+					hurtId, clubDmg, hurtId, hurtId, hurtId, hurtId, safeHp);
 				ExecCmd(cmd);
-			} else if (isProp) {
-				// Check if this prop is one of our invisible placed Minecraft block props (mc_blk_*)
-				bool isMcBlockProp = false;
-				void *renderable = (char*)tr.m_pEnt + 4;
-				if (!IsBadReadPtr(renderable, sizeof(void*))) {
-					void **rendVt = *(void***)renderable;
-					if (!IsBadReadPtr(rendVt, sizeof(void*) * 2)) {
-						typedef const float* (__thiscall *GetOriginFn)(void*);
-						const float *org = ((GetOriginFn)rendVt[1])(renderable);
-						if (org && !IsBadReadPtr(org, sizeof(float) * 3)) {
-							int bx = (int)std::floor(org[0] * proto::kMetersPerUnit);
-							int by = (int)std::floor(org[2] * proto::kMetersPerUnit + 64.0);
-							int bz = (int)std::floor(-org[1] * proto::kMetersPerUnit);
-							if (m_placedBlocks.find({bx, by, bz}) != m_placedBlocks.end()) {
-								isMcBlockProp = true;
-							}
-						}
-					}
-				}
-				if (!isMcBlockProp) {
-					m_ignoreSelfDamageUntil = GetTickCount() + 250;
-					ExecCmd("ent_fire !picker Break; ent_fire !picker RemoveHealth 999");
-				}
 			}
 		}
 	}

@@ -74,7 +74,8 @@ public final class HL2Client {
 				player.yHeadRotO = host.yaw();
 				player.yBodyRotO = host.yaw();
 
-				if (!player.isFallFlying()) {
+				boolean mcFlight = player.isFallFlying() || player.getAbilities().flying;
+				if (!mcFlight) {
 					double feetY = host.y() - player.getEyeHeight();
 					player.setPos(host.x(), feetY, host.z());
 					player.xo = host.x();
@@ -83,7 +84,14 @@ public final class HL2Client {
 					player.setDeltaMovement(0.0, 0.0, 0.0);
 					player.setOnGround(host.onGround());
 				} else {
-					player.setOnGround(false);
+					if (player.isFallFlying()) {
+						player.setOnGround(false);
+					}
+					float pt = mc.getDeltaTracker().getGameTimeDeltaPartialTick(false);
+					double lx = net.minecraft.util.Mth.lerp(pt, player.xo, player.getX());
+					double ly = net.minecraft.util.Mth.lerp(pt, player.yo, player.getY()) + player.getEyeHeight();
+					double lz = net.minecraft.util.Mth.lerp(pt, player.zo, player.getZ());
+					currentPose = new Pose(lx, ly, lz, host.yaw(), host.pitch(), host.fov());
 				}
 			}
 		} else {
@@ -128,7 +136,8 @@ public final class HL2Client {
 			return;
 		}
 
-		dev.hl2craft.client.render.WorldExporter.frame(mc, mc.getDeltaTracker().getGameTimeDeltaPartialTick(false));
+		float partialTick = mc.getDeltaTracker().getGameTimeDeltaPartialTick(false);
+		dev.hl2craft.client.render.WorldExporter.frame(mc, partialTick);
 
 		if (mc.options.cloudStatus().get() != net.minecraft.client.CloudStatus.OFF) {
 			mc.options.cloudStatus().set(net.minecraft.client.CloudStatus.OFF);
@@ -150,7 +159,8 @@ public final class HL2Client {
 		if (player.isDeadOrDying()) {
 			flags |= Proto.MC_DEAD;
 		}
-		if (player.getAbilities().flying || player.isFallFlying()) {
+		boolean mcFlight = player.getAbilities().flying || player.isFallFlying();
+		if (mcFlight) {
 			flags |= Proto.MC_FLYING;
 		}
 		if (player.isBlocking()) {
@@ -174,15 +184,18 @@ public final class HL2Client {
 			}
 		}
 
-
 		float sendYaw = camera.isDetached() ? camera.yRot() : player.getYRot();
 		float sendPitch = camera.isDetached() ? camera.xRot() : player.getXRot();
 
+		double sendX = mcFlight ? net.minecraft.util.Mth.lerp(partialTick, player.xo, player.getX()) : player.getX();
+		double sendY = mcFlight ? net.minecraft.util.Mth.lerp(partialTick, player.yo, player.getY()) : player.getY();
+		double sendZ = mcFlight ? net.minecraft.util.Mth.lerp(partialTick, player.zo, player.getZ()) : player.getZ();
+
 		HL2Link.writeMcState(
 			flags,
-			player.getX(),
-			player.getY(),
-			player.getZ(),
+			sendX,
+			sendY,
+			sendZ,
 			sendYaw,
 			sendPitch,
 			player.getEyeHeight(),
