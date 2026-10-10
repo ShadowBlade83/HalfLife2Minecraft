@@ -135,6 +135,7 @@ namespace hl2craft
 		void ProcessEvents();
 		void ProcessInput();
 		void ComputeUnstickPos(const Vector &playerPos, int ibx, int iby, int ibz, Vector &outPos);
+		void StartUnstickLift(const Vector &targetPos, int ibx, int iby, int ibz);
 
 		bool m_initialized = false;
 		void *m_engineClient = nullptr;
@@ -184,5 +185,9 @@ namespace hl2craft
 		float m_lastGameTime = 0.0f;
 		bool m_wasFlying = false;
 		DWORD m_ignoreSelfDamageUntil = 0;
+		bool m_unstickActive = false;
+		DWORD m_unstickUntil = 0;
+		Vector m_unstickPos{0, 0, 0};
+		int m_unstickBx = 0, m_unstickBy = 0, m_unstickBz = 0;
 	};
 }

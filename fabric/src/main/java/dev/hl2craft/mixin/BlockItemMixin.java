@@ -41,18 +41,6 @@ public abstract class BlockItemMixin {
 		boolean crouching = player != null && player.isShiftKeyDown();
 		double pHeight = crouching ? 0.92 : 1.82;
 
-		if (player != null) {
-			double px = player.getX();
-			double py = player.getY();
-			double pz = player.getZ();
-			if (px + halfW > bx0 && px - halfW < bx1 &&
-				pz + halfW > bz0 && pz - halfW < bz1 &&
-				py + pHeight > by0 + 0.02 && py + 0.02 < by1) {
-				cir.setReturnValue(InteractionResult.FAIL);
-				return;
-			}
-		}
-
 		HL2Link.HostSnapshot snap = HL2Link.readHost();
 		if (snap != null && snap.inPlayable()) {
 			double hx = snap.x();
@@ -61,7 +49,19 @@ public abstract class BlockItemMixin {
 			double hy = snap.y() - eyeH;
 			if (hx + halfW > bx0 && hx - halfW < bx1 &&
 				hz + halfW > bz0 && hz - halfW < bz1 &&
-				hy + pHeight > by0 + 0.02 && hy + 0.02 < by1) {
+				hy + pHeight > by0 + 0.02 && hy + 0.35 < by1) {
+				cir.setReturnValue(InteractionResult.FAIL);
+			}
+			return;
+		}
+
+		if (player != null) {
+			double px = player.getX();
+			double py = player.getY();
+			double pz = player.getZ();
+			if (px + halfW > bx0 && px - halfW < bx1 &&
+				pz + halfW > bz0 && pz - halfW < bz1 &&
+				py + pHeight > by0 + 0.02 && py + 0.35 < by1) {
 				cir.setReturnValue(InteractionResult.FAIL);
 			}
 		}

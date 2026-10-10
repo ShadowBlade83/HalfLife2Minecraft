@@ -532,15 +532,40 @@ namespace hl2craft
 		} else if (m_wasFlying) {
 			m_wasFlying = false;
 			ExecCmd("ent_fire !player addoutput \"gravity 1\"");
+		} else if (m_unstickActive) {
+			DWORD now = GetTickCount();
+			if (now < m_unstickUntil) {
+				char holdCmd[256];
+				snprintf(holdCmd, sizeof(holdCmd),
+					"ent_fire !player addoutput \"basevelocity 0 0 0\"; "
+					"ent_fire !player addoutput \"velocity 0 0 0\"; "
+					"setpos %.2f %.2f %.2f",
+					m_unstickPos.x, m_unstickPos.y, m_unstickPos.z);
+				ExecCmd(holdCmd);
+			} else {
+				m_unstickActive = false;
+				char finishCmd[384];
+				snprintf(finishCmd, sizeof(finishCmd),
+					"ent_fire mc_blk_%d_%d_%d addoutput \"solid 6\"; "
+					"ent_fire prop_physics* addoutput \"solid 6\"; "
+					"ent_fire prop_dynamic* EnableCollision; "
+					"ent_fire func_physbox* addoutput \"solid 6\"; "
+					"ent_fire !player addoutput \"basevelocity 0 0 0\"; "
+					"ent_fire !player addoutput \"velocity 0 0 0\"; "
+					"setpos %.2f %.2f %.2f",
+					m_unstickBx, m_unstickBy, m_unstickBz,
+					m_unstickPos.x, m_unstickPos.y, m_unstickPos.z);
+				ExecCmd(finishCmd);
+			}
 		} else if (!m_placedBlocks.empty()) {
 			int pbx = (int)std::floor(feet_x);
 			int pby = (int)std::floor(feet_y);
 			int pbz = (int)std::floor(feet_z);
-			float pMinX = pos.x - 14.0f, pMaxX = pos.x + 14.0f;
-			float pMinY = pos.y - 14.0f, pMaxY = pos.y + 14.0f;
-			float pMinZ = pos.z + 2.0f,  pMaxZ = pos.z + 69.0f;
+			float pMinX = pos.x - 16.5f, pMaxX = pos.x + 16.5f;
+			float pMinY = pos.y - 16.5f, pMaxY = pos.y + 16.5f;
+			float pMinZ = pos.z - 0.5f,  pMaxZ = pos.z + (isDucking ? 35.5f : 71.5f);
 			bool unstuck = false;
-			for (int dy = 0; dy <= 1 && !unstuck; ++dy) {
+			for (int dy = -1; dy <= 2 && !unstuck; ++dy) {
 				for (int dx = -1; dx <= 1 && !unstuck; ++dx) {
 					for (int dz = -1; dz <= 1 && !unstuck; ++dz) {
 						int ibx = pbx + dx, iby = pby + dy, ibz = pbz + dz;
@@ -554,9 +579,7 @@ namespace hl2craft
 							if (pMinX < bMaxX && pMaxX > bMinX && pMinY < bMaxY && pMaxY > bMinY && pMinZ < bMaxZ && pMaxZ > bMinZ) {
 								Vector targetPos = pos;
 								ComputeUnstickPos(pos, ibx, iby, ibz, targetPos);
-								char unstickCmd[128];
-								snprintf(unstickCmd, sizeof(unstickCmd), "setpos %.2f %.2f %.2f", targetPos.x, targetPos.y, targetPos.z);
-								ExecCmd(unstickCmd);
+								StartUnstickLift(targetPos, ibx, iby, ibz);
 								unstuck = true;
 							}
 						}
@@ -1254,13 +1277,13 @@ namespace hl2craft
 				Vector targetPos = playerPos;
 
 				if (hasPlayer) {
-					// Player hull (+/-16.0 horizontally, 0..72 vertically)
-					float pMinX = playerPos.x - 16.0f;
-					float pMaxX = playerPos.x + 16.0f;
-					float pMinY = playerPos.y - 16.0f;
-					float pMaxY = playerPos.y + 16.0f;
-					float pMinZ = playerPos.z + 0.5f;
-					float pMaxZ = playerPos.z + 71.5f;
+					bool isDucking = (GetAsyncKeyState(VK_SHIFT) & 0x8000) != 0;
+					float pMinX = playerPos.x - 17.5f;
+					float pMaxX = playerPos.x + 17.5f;
+					float pMinY = playerPos.y - 17.5f;
+					float pMaxY = playerPos.y + 17.5f;
+					float pMinZ = playerPos.z - 6.0f;
+					float pMaxZ = playerPos.z + (isDucking ? 36.5f : 72.5f);
 
 					bool overlapX = (pMinX < bMaxX) && (pMaxX > bMinX);
 					bool overlapY = (pMinY < bMaxY) && (pMaxY > bMinY);
@@ -1275,8 +1298,7 @@ namespace hl2craft
 				char cmd[1024];
 				if (overlapping) {
 					snprintf(cmd, sizeof(cmd),
-						"setpos %.2f %.2f %.2f; "
-						"ent_create prop_physics_override model models/props_junk/wood_crate001a.mdl targetname mc_blk_%d_%d_%d disableshadows 1 disablereceiveshadows 1 rendermode 10 modelscale 0.99; "
+						"ent_create prop_physics_override model models/props_junk/wood_crate001a.mdl targetname mc_blk_%d_%d_%d disableshadows 1 disablereceiveshadows 1 rendermode 10 modelscale 0.99 solid 0; "
 						"ent_fire mc_blk_%d_%d_%d addoutput \"origin %.2f %.2f %.2f\"; "
 						"ent_fire mc_blk_%d_%d_%d addoutput \"angles 0 0 0\"; "
 						"ent_fire mc_blk_%d_%d_%d addoutput \"rendermode 10\"; "
@@ -1284,37 +1306,40 @@ namespace hl2craft
 						"ent_fire mc_blk_%d_%d_%d DisableShadow; "
 						"ent_fire mc_blk_%d_%d_%d addoutput \"health 999999\"; "
 						"ent_fire mc_blk_%d_%d_%d DisableMotion; "
-						"setpos %.2f %.2f %.2f",
-						targetPos.x, targetPos.y, targetPos.z,
+						"ent_fire mc_blk_%d_%d_%d addoutput \"solid 0\"",
 						ibx, iby, ibz,
 						ibx, iby, ibz, sx, sy, sz,
 						ibx, iby, ibz,
-						ibx, iby, ibz,
-						ibx, iby, ibz,
-						ibx, iby, ibz,
-						ibx, iby, ibz,
-						ibx, iby, ibz,
-						targetPos.x, targetPos.y, targetPos.z);
-				} else {
-					snprintf(cmd, sizeof(cmd),
-						"ent_create prop_physics_override model models/props_junk/wood_crate001a.mdl targetname mc_blk_%d_%d_%d disableshadows 1 disablereceiveshadows 1 rendermode 10 modelscale 0.99; "
-						"ent_fire mc_blk_%d_%d_%d addoutput \"origin %.2f %.2f %.2f\"; "
-						"ent_fire mc_blk_%d_%d_%d addoutput \"angles 0 0 0\"; "
-						"ent_fire mc_blk_%d_%d_%d addoutput \"rendermode 10\"; "
-						"ent_fire mc_blk_%d_%d_%d addoutput \"effects 80\"; "
-						"ent_fire mc_blk_%d_%d_%d DisableShadow; "
-						"ent_fire mc_blk_%d_%d_%d addoutput \"health 999999\"; "
-						"ent_fire mc_blk_%d_%d_%d DisableMotion",
-						ibx, iby, ibz,
-						ibx, iby, ibz, sx, sy, sz,
 						ibx, iby, ibz,
 						ibx, iby, ibz,
 						ibx, iby, ibz,
 						ibx, iby, ibz,
 						ibx, iby, ibz,
 						ibx, iby, ibz);
+					ExecCmd(cmd);
+					StartUnstickLift(targetPos, ibx, iby, ibz);
+				} else {
+					snprintf(cmd, sizeof(cmd),
+						"ent_create prop_physics_override model models/props_junk/wood_crate001a.mdl targetname mc_blk_%d_%d_%d disableshadows 1 disablereceiveshadows 1 rendermode 10 modelscale 0.99 solid 0; "
+						"ent_fire mc_blk_%d_%d_%d addoutput \"origin %.2f %.2f %.2f\"; "
+						"ent_fire mc_blk_%d_%d_%d addoutput \"angles 0 0 0\"; "
+						"ent_fire mc_blk_%d_%d_%d addoutput \"rendermode 10\"; "
+						"ent_fire mc_blk_%d_%d_%d addoutput \"effects 80\"; "
+						"ent_fire mc_blk_%d_%d_%d DisableShadow; "
+						"ent_fire mc_blk_%d_%d_%d addoutput \"health 999999\"; "
+						"ent_fire mc_blk_%d_%d_%d DisableMotion; "
+						"ent_fire mc_blk_%d_%d_%d addoutput \"solid 6\"",
+						ibx, iby, ibz,
+						ibx, iby, ibz, sx, sy, sz,
+						ibx, iby, ibz,
+						ibx, iby, ibz,
+						ibx, iby, ibz,
+						ibx, iby, ibz,
+						ibx, iby, ibz,
+						ibx, iby, ibz,
+						ibx, iby, ibz);
+					ExecCmd(cmd);
 				}
-				ExecCmd(cmd);
 			} else if (ev->type == proto::kEvBlockBroken) {
 				int ibx = (int)std::round(ev->a);
 				int iby = (int)std::round(ev->b);
@@ -1464,7 +1489,7 @@ namespace hl2craft
 		if (upClear) {
 			outPos.x = playerPos.x;
 			outPos.y = playerPos.y;
-			outPos.z = bMaxZ + 1.0f;
+			outPos.z = bMaxZ + 1.5f;
 			return;
 		}
 
@@ -1511,6 +1536,34 @@ namespace hl2craft
 		outPos.x = cands[chosenIdx].x;
 		outPos.y = cands[chosenIdx].y;
 		outPos.z = playerPos.z;
+	}
+
+	void HL2Bridge::StartUnstickLift(const Vector &targetPos, int ibx, int iby, int ibz)
+	{
+		m_unstickActive = true;
+		m_unstickUntil = GetTickCount() + 90;
+		m_unstickPos = targetPos;
+		m_unstickBx = ibx;
+		m_unstickBy = iby;
+		m_unstickBz = ibz;
+
+		char unstickCmd[512];
+		snprintf(unstickCmd, sizeof(unstickCmd),
+			"ent_fire mc_blk_%d_%d_%d addoutput \"solid 0\"; "
+			"ent_fire prop_physics* addoutput \"solid 0\"; "
+			"ent_fire prop_dynamic* DisableCollision; "
+			"ent_fire func_physbox* addoutput \"solid 0\"; "
+			"ent_fire !player addoutput \"basevelocity 0 0 0\"; "
+			"ent_fire !player addoutput \"velocity 0 0 0\"; "
+			"setpos %.2f %.2f %.2f; "
+			"ent_fire mc_blk_%d_%d_%d addoutput \"solid 6\" 0.15; "
+			"ent_fire prop_physics* addoutput \"solid 6\" 0.15; "
+			"ent_fire prop_dynamic* EnableCollision \"\" 0.15; "
+			"ent_fire func_physbox* addoutput \"solid 6\" 0.15",
+			ibx, iby, ibz,
+			targetPos.x, targetPos.y, targetPos.z,
+			ibx, iby, ibz);
+		ExecCmd(unstickCmd);
 	}
 
 	void HL2Bridge::ProcessInput()
