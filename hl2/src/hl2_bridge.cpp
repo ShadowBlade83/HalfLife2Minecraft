@@ -646,11 +646,13 @@ namespace hl2craft
 						}
 					}
 
-					if (blocked) {
-						// Shield absorbs the damage!
+					if (blocked || GetTickCount() < m_ignoreSelfDamageUntil) {
+						// Shield absorbs the damage or self-damage immunity window active!
 						*(int*)((char*)pPlayer + 0x90) = m_lastPlayerHl2Hp;
 						curHp = m_lastPlayerHl2Hp;
-						ExecCmd("play weapons/fx/rics/ric1.wav");
+						if (blocked) {
+							ExecCmd("play weapons/fx/rics/ric1.wav");
+						}
 					} else {
 						if (curHp <= 0) {
 							// Player died in HL2 -> clear blocks and kill props
@@ -708,6 +710,7 @@ namespace hl2craft
 	static bool IsNpcClass(const char *className)
 	{
 		if (!className || !className[0]) return false;
+		if (strstr(className, "Player") != nullptr) return false;
 		if (strstr(className, "NPC") != nullptr) return true;
 		if (strstr(className, "Zombie") != nullptr) return true;
 		if (strstr(className, "Headcrab") != nullptr) return true;
@@ -973,9 +976,12 @@ namespace hl2craft
 			typedef int (__thiscall *GetLocalPlayerFn)(void*);
 			localPlayer = ((GetLocalPlayerFn)evt[12])(m_engineClient);
 		}
+		void *pPlayerEnt = GetLocalPlayerEntity();
+		Vector playerPos{0, 0, 0};
+		bool hasPlayerPos = GetPlayerPos(playerPos);
 
 		int maxEnts = getHighest ? getHighest(m_entityList) : 64;
-		if (maxEnts > 128) maxEnts = 128;
+		if (maxEnts > 256) maxEnts = 256;
 
 		proto::ActorTable *tbl = (proto::ActorTable*)(m_shmView + proto::kOffActorTable);
 		uint32_t seq = tbl->seq;
@@ -988,7 +994,7 @@ namespace hl2craft
 			if (i == localPlayer) continue;
 
 			void *ent = getEntity(m_entityList, i);
-			if (!ent || IsBadReadPtr(ent, sizeof(void*))) continue;
+			if (!ent || ent == pPlayerEnt || IsBadReadPtr(ent, sizeof(void*))) continue;
 
 			void *networkable = (char*)ent + 8;
 			if (IsBadReadPtr(networkable, sizeof(void*))) continue;
@@ -1002,18 +1008,16 @@ namespace hl2craft
 			const char *className = *(const char**)((char*)clientClass + 8);
 			if (!className) continue;
 
+			// Only mirror living NPCs as HL2ActorEntity proxies in Minecraft (never props or placed blocks!)
 			bool isNpc = IsNpcClass(className);
-			bool isProp = IsPropClass(className);
-			if (!isNpc && !isProp) continue;
+			if (!isNpc) continue;
 
 			if (((IsDormantFn)netVt[8])(networkable)) continue;
 
-			if (isNpc) {
-				if (!IsBadReadPtr((char*)ent + 0x8F, 8)) {
-					uint8_t lifeState = *(uint8_t*)((char*)ent + 0x8F);
-					int health = *(int*)((char*)ent + 0x90);
-					if (lifeState != 0 || health <= 0) continue;
-				}
+			if (!IsBadReadPtr((char*)ent + 0x8F, 8)) {
+				uint8_t lifeState = *(uint8_t*)((char*)ent + 0x8F);
+				int health = *(int*)((char*)ent + 0x90);
+				if (lifeState != 0 || health <= 0) continue;
 			}
 
 			void *renderable = (char*)ent + 4;
@@ -1025,9 +1029,19 @@ namespace hl2craft
 			const float *org = ((GetOriginFn)rendVt[1])(renderable);
 			if (!org || IsBadReadPtr(org, sizeof(float) * 3)) continue;
 
+			// Never create a proxy hitbox overlapping the local player's own position
+			if (hasPlayerPos) {
+				float dx = org[0] - playerPos.x;
+				float dy = org[1] - playerPos.y;
+				float dz = org[2] - playerPos.z;
+				if (dx * dx + dy * dy < 24.0f * 24.0f && std::abs(dz) < 72.0f) {
+					continue;
+				}
+			}
+
 			proto::ActorRecord &rec = tbl->actors[count];
 			rec.entIndex = i;
-			rec.flags = isNpc ? proto::kActorHostile : 0;
+			rec.flags = proto::kActorHostile;
 			rec.x = org[0] * (float)proto::kMetersPerUnit;
 			rec.y = (org[2] * (float)proto::kMetersPerUnit) + (float)kYOffset;
 			rec.z = -org[1] * (float)proto::kMetersPerUnit;
@@ -1035,9 +1049,7 @@ namespace hl2craft
 
 			float w = 0.6f;
 			float h = 1.8f;
-			if (isProp) {
-				w = 0.7f; h = 0.8f;
-			} else if (strstr(className, "Headcrab")) {
+			if (strstr(className, "Headcrab")) {
 				w = 0.4f; h = 0.4f;
 			} else if (strstr(className, "Zombie")) {
 				w = 0.7f; h = 1.9f;
@@ -1089,12 +1101,13 @@ namespace hl2craft
 				int dmg = (int)std::max(ev->a * 3.5f, 25.0f);
 				Vector entPos{0, 0, 0};
 				bool foundPos = false;
-				if (targetEnt > 0 && m_entityList) {
+				void *pPlayerEnt = GetLocalPlayerEntity();
+				if (targetEnt > 1 && m_entityList) {
 					void **evt = *(void***)m_entityList;
 					typedef void* (__thiscall *GetClientEntityFn)(void*, int);
 					GetClientEntityFn getEntity = (GetClientEntityFn)evt[3];
 					void *ent = getEntity(m_entityList, targetEnt);
-					if (ent && !IsBadReadPtr(ent, sizeof(void*))) {
+					if (ent && ent != pPlayerEnt && !IsBadReadPtr(ent, sizeof(void*))) {
 						void *renderable = (char*)ent + 4;
 						if (!IsBadReadPtr(renderable, sizeof(void*))) {
 							void **rendVt = *(void***)renderable;
@@ -1110,20 +1123,38 @@ namespace hl2craft
 					}
 				}
 
+				Vector playerPos{0, 0, 0};
+				bool hasPlayerPos = GetPlayerPos(playerPos);
+				if (foundPos && hasPlayerPos) {
+					float dx = entPos.x - playerPos.x;
+					float dy = entPos.y - playerPos.y;
+					float dist = std::sqrt(dx * dx + dy * dy);
+					if (dist < 24.0f) {
+						foundPos = false;
+					} else if (dist < 60.0f) {
+						// Shift point_hurt away from player so splash radius never touches !player
+						entPos.x += (dx / dist) * 20.0f;
+						entPos.y += (dy / dist) * 20.0f;
+					}
+				}
+
+				m_ignoreSelfDamageUntil = GetTickCount() + 250;
 				if (foundPos) {
 					static uint32_t s_hurtCounter = 0;
 					uint32_t hurtId = ++s_hurtCounter;
-					char cmd[320];
+					int safeHp = (m_lastSyncedHp > 0) ? m_lastSyncedHp : 100;
+					char cmd[384];
 					snprintf(cmd, sizeof(cmd),
 						"ent_create point_hurt targetname mc_hrt_%u; "
 						"ent_fire mc_hrt_%u addoutput \"origin %.2f %.2f %.2f\"; "
 						"ent_fire mc_hrt_%u addoutput \"Damage %d\"; "
-						"ent_fire mc_hrt_%u addoutput \"DamageRadius 50\"; "
+						"ent_fire mc_hrt_%u addoutput \"DamageRadius 28\"; "
 						"ent_fire mc_hrt_%u addoutput \"DamageType 2\"; "
 						"ent_fire mc_hrt_%u Hurt; "
-						"ent_fire mc_hrt_%u Kill",
+						"ent_fire mc_hrt_%u Kill; "
+						"ent_fire !player sethealth %d",
 						hurtId, hurtId, entPos.x, entPos.y, entPos.z + 32.0f,
-						hurtId, dmg, hurtId, hurtId, hurtId, hurtId);
+						hurtId, dmg, hurtId, hurtId, hurtId, hurtId, safeHp);
 					ExecCmd(cmd);
 				} else {
 					HitCurrentTarget(dmg);

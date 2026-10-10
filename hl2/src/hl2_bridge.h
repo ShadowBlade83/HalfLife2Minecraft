@@ -183,5 +183,6 @@ namespace hl2craft
 		bool m_wasLoading = false;
 		float m_lastGameTime = 0.0f;
 		bool m_wasFlying = false;
+		DWORD m_ignoreSelfDamageUntil = 0;
 	};
 }
