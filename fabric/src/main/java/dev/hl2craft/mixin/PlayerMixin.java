@@ -45,34 +45,33 @@ public abstract class PlayerMixin {
 					dev.hl2craft.HL2Craft.LOG.info("HL2Craft: ServerPlayer game mode synchronized to {}", targetMode);
 				}
 
-				if (sp.isFallFlying()) {
-					sp.setOnGround(false);
-					sp.fallDistance = 0.0f;
-					return;
-				}
-
-				double feetY = snap.y() - sp.getEyeHeight();
-				double dx = sp.getX() - snap.x();
-				double dy = sp.getY() - feetY;
-				double dz = sp.getZ() - snap.z();
-				double distSq = dx * dx + dy * dy + dz * dz;
-
-				boolean teleportChanged = (lastTeleportSeq != -1 && snap.teleportSeq() != lastTeleportSeq);
+				boolean teleportChanged = (lastTeleportSeq == -1 || snap.teleportSeq() != lastTeleportSeq);
 				lastTeleportSeq = snap.teleportSeq();
 
-				if (teleportChanged) {
-					sp.teleportTo(serverLevel, snap.x(), feetY, snap.z(), java.util.Collections.emptySet(), snap.yaw(), snap.pitch(), true);
+				double feetY = snap.y() - sp.getEyeHeight();
+				dev.hl2craft.world.HL2Collision.ensurePlayerFloorAndStep(sp.getX(), sp.getY(), sp.getZ(), feetY);
+
+				if (teleportChanged || snap.hl2PhysicsOverride()) {
+					if (teleportChanged) {
+						sp.teleportTo(serverLevel, snap.x(), feetY, snap.z(), java.util.Collections.emptySet(), snap.yaw(), snap.pitch(), true);
+					} else {
+						sp.setPos(snap.x(), feetY, snap.z());
+						sp.xo = sp.xOld = snap.x();
+						sp.yo = sp.yOld = feetY;
+						sp.zo = sp.zOld = snap.z();
+						sp.setYRot(snap.yaw());
+						sp.setXRot(snap.pitch());
+					}
+					sp.setDeltaMovement(net.minecraft.world.phys.Vec3.ZERO);
+					sp.setOnGround(snap.onGround());
+					sp.fallDistance = 0.0f;
 				} else {
-					sp.setPos(snap.x(), feetY, snap.z());
-					sp.xo = sp.xOld = snap.x();
-					sp.yo = sp.yOld = feetY;
-					sp.zo = sp.zOld = snap.z();
 					sp.setYRot(snap.yaw());
 					sp.setXRot(snap.pitch());
+					if (snap.onLadder() || sp.isFallFlying() || sp.getAbilities().flying) {
+						sp.fallDistance = 0.0f;
+					}
 				}
-				sp.setDeltaMovement(net.minecraft.world.phys.Vec3.ZERO);
-				sp.setOnGround(snap.onGround());
-				sp.fallDistance = 0.0f;
 				serverLevel.getChunkSource().move(sp);
 				if (sp.connection != null) {
 					sp.connection.resetPosition();

@@ -74,8 +74,7 @@ public final class HL2Client {
 				player.yHeadRotO = host.yaw();
 				player.yBodyRotO = host.yaw();
 
-				boolean mcFlight = player.isFallFlying() || player.getAbilities().flying;
-				if (!mcFlight) {
+				if (host.hl2PhysicsOverride()) {
 					double feetY = host.y() - player.getEyeHeight();
 					player.setPos(host.x(), feetY, host.z());
 					player.xo = host.x();
@@ -117,7 +116,7 @@ public final class HL2Client {
 		mc.options.setCameraType(net.minecraft.client.CameraType.FIRST_PERSON);
 		mc.options.pauseOnLostFocus = false;
 		mc.options.enableVsync().set(false);
-		mc.options.framerateLimit().set(60);
+		mc.options.framerateLimit().set(260);
 		mc.options.cloudStatus().set(net.minecraft.client.CloudStatus.OFF);
 		mc.options.renderDistance().set(6);
 		mc.options.simulationDistance().set(6);
@@ -141,6 +140,9 @@ public final class HL2Client {
 
 		if (mc.options.cloudStatus().get() != net.minecraft.client.CloudStatus.OFF) {
 			mc.options.cloudStatus().set(net.minecraft.client.CloudStatus.OFF);
+		}
+		if (mc.options.framerateLimit().get() < 260) {
+			mc.options.framerateLimit().set(260);
 		}
 
 		int flags = Proto.MC_IN_WORLD;
@@ -187,9 +189,9 @@ public final class HL2Client {
 		float sendYaw = camera.isDetached() ? camera.yRot() : player.getYRot();
 		float sendPitch = camera.isDetached() ? camera.xRot() : player.getXRot();
 
-		double sendX = mcFlight ? net.minecraft.util.Mth.lerp(partialTick, player.xo, player.getX()) : player.getX();
-		double sendY = mcFlight ? net.minecraft.util.Mth.lerp(partialTick, player.yo, player.getY()) : player.getY();
-		double sendZ = mcFlight ? net.minecraft.util.Mth.lerp(partialTick, player.zo, player.getZ()) : player.getZ();
+		double sendX = net.minecraft.util.Mth.lerp(partialTick, player.xo, player.getX());
+		double sendY = net.minecraft.util.Mth.lerp(partialTick, player.yo, player.getY());
+		double sendZ = net.minecraft.util.Mth.lerp(partialTick, player.zo, player.getZ());
 
 		HL2Link.writeMcState(
 			flags,

@@ -57,6 +57,8 @@ namespace hl2craft::proto
 		kHostLoading   = 1u << 2,  // loading screen / transition
 		kHostPaused    = 1u << 3,  // game is paused
 		kHostOnGround  = 1u << 4,  // player is touching solid ground in HL2
+		kHostOnLadder  = 1u << 5,  // player is touching a ladder in HL2
+		kHostVehicleOrOverride = 1u << 6, // player is in/near a vehicle or HL2 physics override active
 	};
 
 	struct HostState

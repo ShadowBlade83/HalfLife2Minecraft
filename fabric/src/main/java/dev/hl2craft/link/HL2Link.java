@@ -67,6 +67,14 @@ public final class HL2Link {
 		public boolean onGround() {
 			return (flags & HOST_ON_GROUND) != 0;
 		}
+
+		public boolean onLadder() {
+			return (flags & HOST_ON_LADDER) != 0;
+		}
+
+		public boolean hl2PhysicsOverride() {
+			return (flags & HOST_VEHICLE_OR_OVERRIDE) != 0;
+		}
 	}
 
 	public record WorldEntity(int kind, int id, float x, float y, float z, float yaw, float pitch, float scale, float[] ext, float[] uv, int tint) {

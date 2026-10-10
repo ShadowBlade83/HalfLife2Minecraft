@@ -35,10 +35,11 @@ public abstract class BlockCollisionsMixin {
 			blockShape = Shapes.empty();
 		}
 		if (context instanceof net.minecraft.world.phys.shapes.EntityCollisionContext entityContext
-			&& entityContext.getEntity() instanceof net.minecraft.world.entity.player.Player player
-			&& !player.isFallFlying()
-			&& !player.getAbilities().flying) {
-			return blockShape;
+			&& entityContext.getEntity() instanceof net.minecraft.world.entity.player.Player) {
+			dev.hl2craft.link.HL2Link.HostSnapshot snap = dev.hl2craft.link.HL2Link.readHost();
+			if (snap != null && snap.hl2PhysicsOverride()) {
+				return blockShape;
+			}
 		}
 		VoxelShape hl2 = HL2Collision.shapeAt(pos);
 		if (hl2 == null) {

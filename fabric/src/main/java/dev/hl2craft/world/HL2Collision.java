@@ -296,6 +296,36 @@ public final class HL2Collision {
 		}
 	}
 
+	public static double ensurePlayerFloorAndStep(double px, double py, double pz, double fallbackFloorY) {
+		int bx = (int) Math.floor(px);
+		int bz = (int) Math.floor(pz);
+		int fallbackBy = (int) Math.floor(fallbackFloorY - 0.15);
+		long centerChunk = colKey(bx >> 4, bz >> 4);
+		int chunkFy = CHUNK_FLOOR_Y.getOrDefault(centerChunk, fallbackBy);
+
+		for (int dx = -1; dx <= 1; dx++) {
+			for (int dz = -1; dz <= 1; dz++) {
+				int cx = bx + dx;
+				int cz = bz + dz;
+				long col = colKey(cx, cz);
+				if (!COLUMN_FLOOR_Y.containsKey(col)) {
+					COLUMN_FLOOR_Y.put(col, chunkFy);
+					SHAPES.putIfAbsent(BlockPos.asLong(cx, chunkFy, cz), Shapes.block());
+					SHAPES.putIfAbsent(BlockPos.asLong(cx, chunkFy - 1, cz), Shapes.block());
+				}
+			}
+		}
+
+		Integer fy = COLUMN_FLOOR_Y.get(colKey(bx, bz));
+		if (fy != null) {
+			VoxelShape s = SHAPES.get(BlockPos.asLong(bx, fy, bz));
+			if (s != null && !s.isEmpty()) {
+				return fy + s.max(net.minecraft.core.Direction.Axis.Y);
+			}
+		}
+		return Double.NaN;
+	}
+
 	private static void readRegion(MemorySegment s, long p) {
 		int minX = s.get(JAVA_INT, p);
 		int minY = s.get(JAVA_INT, p + 4);
@@ -313,6 +343,7 @@ public final class HL2Collision {
 		}
 
 		java.util.HashMap<Long, VoxelShape> next = new java.util.HashMap<>(count * 2);
+		java.util.HashSet<Long> seenFloorCols = new java.util.HashSet<>(count);
 		long e = p + COL_REGION_HEADER_BYTES;
 		for (int i = 0; i < count; i++, e += COL_BLOCK_BYTES) {
 			int x = s.get(JAVA_INT, e);
@@ -321,8 +352,11 @@ public final class HL2Collision {
 			VoxelShape shape = buildShape(s, e + 16);
 			if (shape != null) {
 				next.put(BlockPos.asLong(x, y, z), shape);
-				COLUMN_FLOOR_Y.put(colKey(x, z), y);
-				CHUNK_FLOOR_Y.put(colKey(x >> 4, z >> 4), y);
+				long col = colKey(x, z);
+				if (seenFloorCols.add(col)) {
+					COLUMN_FLOOR_Y.put(col, y);
+					CHUNK_FLOOR_Y.put(colKey(x >> 4, z >> 4), y);
+				}
 			}
 		}
 

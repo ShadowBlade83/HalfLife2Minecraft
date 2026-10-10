@@ -66,6 +66,8 @@ public final class Proto {
 	public static final int HOST_LOADING = 4;
 	public static final int HOST_PAUSED = 8;
 	public static final int HOST_ON_GROUND = 16;
+	public static final int HOST_ON_LADDER = 32;
+	public static final int HOST_VEHICLE_OR_OVERRIDE = 64;
 
 	// MC state (MC -> HL2)
 	public static final long MS_SEQ = 0x00;

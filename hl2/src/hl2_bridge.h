@@ -130,7 +130,7 @@ namespace hl2craft
 
 		void InitSharedMemory();
 		void UpdateHostState(const Vector &pos, const QAngle &angles);
-		void ScanCollision(const Vector &playerPos);
+		void ScanCollision(const Vector &playerPos, int radius = 26);
 		void ScanActors();
 		void ProcessEvents();
 		void ProcessInput();
@@ -158,6 +158,7 @@ namespace hl2craft
 		char m_lastMapName[64] = {0};
 		DWORD m_lastStripTime = 0;
 		DWORD m_lastColScanTime = 0;
+		DWORD m_lastFastScanTime = 0;
 		DWORD m_lastActorScanTime = 0;
 		DWORD m_lastSpacePress = 0;
 		bool m_lastSpaceKey = false;
@@ -166,6 +167,7 @@ namespace hl2craft
 		int m_lastMouseX = -1, m_lastMouseY = -1;
 		bool m_guiLBtn = false, m_guiRBtn = false;
 		Vector m_lastScanPos{0, 0, 0};
+		Vector m_lastFastScanPos{0, 0, 0};
 		int m_lastCamMode = 0;
 		float m_lastCamDist = 0.0f;
 		bool m_keysDown[256] = {false};
@@ -189,5 +191,9 @@ namespace hl2craft
 		DWORD m_unstickUntil = 0;
 		Vector m_unstickPos{0, 0, 0};
 		int m_unstickBx = 0, m_unstickBy = 0, m_unstickBz = 0;
+		DWORD m_hl2OverrideUntil = 0;
+		bool m_mcPhysicsActive = false;
+		bool m_hasLastSentMcPos = false;
+		Vector m_lastSentMcPos{0, 0, 0};
 	};
 }
