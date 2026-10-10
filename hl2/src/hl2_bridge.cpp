@@ -379,7 +379,7 @@ namespace hl2craft
 			m_collisionEpoch++;
 			m_placedBlocks.clear();
 			D3D9WorldRender::Get().ClearSections();
-			ExecCmd("ent_fire mc_blk_* Kill");
+			ExecCmd("ent_fire mc_blk_* Kill; ent_remove_all mc_strip; ent_create player_weaponstrip targetname mc_strip; ent_fire mc_strip StripWeaponsAndSuit; ent_fire item_suit Kill;");
 			if (m_shmView) {
 				uint64_t head = *(uint64_t*)(m_shmView + proto::kOffCollisionRing + proto::kColRingHeadOff);
 				uint64_t pos = head % proto::kColRingDataBytes;
@@ -401,7 +401,7 @@ namespace hl2craft
 			m_wasInWorld = true;
 			HookWindow();
 			PatchMinecraftJumpHeight();
-			ExecCmd("sv_cheats 1; sv_gravity 600; mat_queue_mode 0; unbind ctrl; unbind lctrl; unbind rctrl; bind shift +duck; bind lshift +duck; bind ctrl +speed; bind lctrl +speed; hl2_normspeed 190; r_drawviewmodel 0; ent_fire !player StripWeapons;");
+			ExecCmd("sv_cheats 1; sv_gravity 600; mat_queue_mode 0; unbind ctrl; unbind lctrl; unbind rctrl; bind shift +duck; bind lshift +duck; bind ctrl +speed; bind lctrl +speed; hl2_normspeed 190; r_drawviewmodel 0; crosshair 0; ent_remove_all mc_strip; ent_create player_weaponstrip targetname mc_strip; ent_fire mc_strip StripWeaponsAndSuit; ent_fire item_suit Kill;");
 		}
 		m_lastPosX = pos.x;
 		m_lastPosY = pos.y;
@@ -413,9 +413,14 @@ namespace hl2craft
 		ProcessEvents();
 
 		DWORD now = GetTickCount();
-		if (now - m_lastStripTime > 2500) {
+		if (now - m_lastStripTime > 400) {
 			m_lastStripTime = now;
-			ExecCmd("firstperson; r_drawviewmodel 0; mat_queue_mode 0; ent_fire !player addoutput \"effects 0\"; ent_fire !player StripWeapons; mat_vsync 0; fps_max 0; engine_no_focus_sleep 0;");
+			static uint32_t s_stripCycle = 0;
+			if ((++s_stripCycle & 7) == 1) {
+				ExecCmd("firstperson; r_drawviewmodel 0; crosshair 0; mat_queue_mode 0; ent_fire !player addoutput \"effects 0\"; ent_remove_all mc_strip; ent_create player_weaponstrip targetname mc_strip; ent_fire player_weaponstrip StripWeaponsAndSuit; ent_fire item_suit Kill; mat_vsync 0; fps_max 0; engine_no_focus_sleep 0;");
+			} else {
+				ExecCmd("r_drawviewmodel 0; crosshair 0; ent_fire player_weaponstrip StripWeaponsAndSuit; ent_fire item_suit Kill;");
+			}
 		}
 
 		float dMovedSq = (pos.x - m_lastScanPos.x)*(pos.x - m_lastScanPos.x) +
@@ -1014,10 +1019,9 @@ namespace hl2craft
 
 			if (((IsDormantFn)netVt[8])(networkable)) continue;
 
-			if (!IsBadReadPtr((char*)ent + 0x8F, 8)) {
+			if (!IsBadReadPtr((char*)ent + 0x8F, 4)) {
 				uint8_t lifeState = *(uint8_t*)((char*)ent + 0x8F);
-				int health = *(int*)((char*)ent + 0x90);
-				if (lifeState != 0 || health <= 0) continue;
+				if (lifeState != 0) continue;
 			}
 
 			void *renderable = (char*)ent + 4;
@@ -1343,12 +1347,13 @@ namespace hl2craft
 		fwd.y = std::cos(radPitch) * std::sin(radYaw);
 		fwd.z = std::sin(radPitch);
 
+		bool isDucking = (GetAsyncKeyState(VK_SHIFT) & 0x8000) != 0;
 		Vector start = pos;
-		start.z += 64.0f;
+		start.z += isDucking ? 28.0f : 64.0f;
 		Vector end;
-		end.x = start.x + fwd.x * 95.0f;
-		end.y = start.y + fwd.y * 95.0f;
-		end.z = start.z + fwd.z * 95.0f;
+		end.x = start.x + fwd.x * 120.0f;
+		end.y = start.y + fwd.y * 120.0f;
+		end.z = start.z + fwd.z * 120.0f;
 
 		Ray_t ray;
 		ray.Init(start, end);
@@ -1368,9 +1373,10 @@ namespace hl2craft
 
 		void **vt = *(void***)m_engineTrace;
 		typedef void (__thiscall *TraceRayFn)(void*, const Ray_t&, unsigned int, ITraceFilter*, trace_t*);
-		((TraceRayFn)vt[4])(m_engineTrace, ray, 0x200400B, &filter, &tr);
+		// 0x4600400B = MASK_SHOT | CONTENTS_GRATE (includes CONTENTS_HITBOX and CONTENTS_DEBRIS for NPCs and props)
+		((TraceRayFn)vt[4])(m_engineTrace, ray, 0x4600400B, &filter, &tr);
 
-		if (tr.fraction < 1.0f && tr.m_pEnt) {
+		if (tr.fraction < 1.0f && tr.m_pEnt && tr.m_pEnt != filter.pPlayer) {
 			void *networkable = (char*)tr.m_pEnt + 8;
 			const char *className = "";
 			if (!IsBadReadPtr(networkable, sizeof(void*))) {
@@ -1387,19 +1393,33 @@ namespace hl2craft
 			bool isNpc = IsNpcClass(className);
 			bool isProp = IsPropClass(className);
 			if (isNpc) {
-				if (!IsBadReadPtr((char*)tr.m_pEnt + 0x90, 4)) {
-					int curHp = *(int*)((char*)tr.m_pEnt + 0x90);
-					int newHp = std::max(0, curHp - dmg);
-					char cmd[64];
-					if (newHp <= 0) {
-						snprintf(cmd, sizeof(cmd), "ent_fire !picker sethealth 0; ent_fire !picker Die");
-					} else {
-						snprintf(cmd, sizeof(cmd), "ent_fire !picker sethealth %d", newHp);
+				m_ignoreSelfDamageUntil = GetTickCount() + 250;
+				char cmd[128];
+				snprintf(cmd, sizeof(cmd), "ent_fire !picker RemoveHealth %d", dmg);
+				ExecCmd(cmd);
+			} else if (isProp) {
+				// Check if this prop is one of our invisible placed Minecraft block props (mc_blk_*)
+				bool isMcBlockProp = false;
+				void *renderable = (char*)tr.m_pEnt + 4;
+				if (!IsBadReadPtr(renderable, sizeof(void*))) {
+					void **rendVt = *(void***)renderable;
+					if (!IsBadReadPtr(rendVt, sizeof(void*) * 2)) {
+						typedef const float* (__thiscall *GetOriginFn)(void*);
+						const float *org = ((GetOriginFn)rendVt[1])(renderable);
+						if (org && !IsBadReadPtr(org, sizeof(float) * 3)) {
+							int bx = (int)std::floor(org[0] * proto::kMetersPerUnit);
+							int by = (int)std::floor(org[2] * proto::kMetersPerUnit + 64.0);
+							int bz = (int)std::floor(-org[1] * proto::kMetersPerUnit);
+							if (m_placedBlocks.find({bx, by, bz}) != m_placedBlocks.end()) {
+								isMcBlockProp = true;
+							}
+						}
 					}
-					ExecCmd(cmd);
 				}
-			} else if (isProp && m_creative) {
-				ExecCmd("ent_fire !picker Break");
+				if (!isMcBlockProp) {
+					m_ignoreSelfDamageUntil = GetTickCount() + 250;
+					ExecCmd("ent_fire !picker Break; ent_fire !picker RemoveHealth 999");
+				}
 			}
 		}
 	}

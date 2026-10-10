@@ -46,11 +46,22 @@ public final class HL2Craft implements ModInitializer {
 	}
 
 	private static void giveStarterKit(ServerPlayer player) {
-		if (!player.getInventory().isEmpty()) {
+		var inv = player.getInventory();
+		if (!inv.isEmpty()) {
+			boolean hasAxe = false;
+			for (int i = 0; i < inv.getContainerSize(); i++) {
+				if (inv.getItem(i).is(Items.DIAMOND_AXE)) {
+					hasAxe = true;
+					break;
+				}
+			}
+			if (!hasAxe) {
+				inv.add(new ItemStack(Items.DIAMOND_AXE));
+			}
 			return;
 		}
-		var inv = player.getInventory();
 		inv.add(new ItemStack(Items.DIAMOND_SWORD));
+		inv.add(new ItemStack(Items.DIAMOND_AXE));
 		inv.add(new ItemStack(Items.DIAMOND_PICKAXE));
 		inv.add(new ItemStack(Items.BOW));
 		inv.add(new ItemStack(Items.ARROW, 64));
