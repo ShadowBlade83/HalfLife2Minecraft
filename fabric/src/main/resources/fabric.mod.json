@@ -4,8 +4,8 @@
   "version": "${version}",
   "name": "HL2Craft",
   "description": "Half-Life 2 x Minecraft clean integration with dynamic voxel collision, actor mirroring, and HUD passthrough.",
-  "authors": ["Maga"],
-  "license": "MIT",
+  "authors": ["ShadowBlade83", "Maga"],
+  "license": "CC-BY-NC-4.0",
   "environment": "*",
   "entrypoints": {
     "main": ["dev.hl2craft.HL2Craft"],

@@ -112,3 +112,20 @@ gradlew.bat build
 ```
 The compiled mod JAR (with `HL2Minecraft.addon32` bundled inside) will be generated at:
 `fabric/build/libs/hl2craft-1.0.0.jar`.
+
+---
+
+## 💡 Credits & Inspiration
+
+- **Author:** [ShadowBlade83](https://github.com/ShadowBlade83)
+- **Inspiration:** This project was heavily inspired by **SkyCraft** (the Skyrim × Minecraft crossover project).
+
+---
+
+## 📜 License (CC BY-NC 4.0)
+
+This project is licensed under the **Attribution-NonCommercial 4.0 (CC BY-NC 4.0)** license — see the [LICENSE](LICENSE) file for full details:
+- ✅ **Free to copy, modify, and share** for personal or educational use.
+- 📌 **Attribution Required:** You **must** credit the original author (**ShadowBlade83**) and link back to this repository.
+- 🚫 **Non-Commercial Only:** You may **not** use this project or any derivatives for commercial purposes or monetization.
+
