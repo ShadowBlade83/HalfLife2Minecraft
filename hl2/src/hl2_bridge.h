@@ -1,0 +1,187 @@
+#pragma once
+#include <windows.h>
+#include <cmath>
+#include <cstdint>
+#include <cstdio>
+#include <algorithm>
+#include <vector>
+#include <unordered_set>
+#include <set>
+#include <tuple>
+#include <cstring>
+#include "../../protocol/hl2craft_protocol.h"
+
+namespace hl2craft
+{
+	typedef void* (*CreateInterfaceFn)(const char *pName, int *pReturnCode);
+
+	struct Vector { float x, y, z; };
+	struct VectorAligned : public Vector { float w; };
+	struct QAngle { float pitch, yaw, roll; };
+
+	struct Ray_t {
+		VectorAligned m_Start;
+		VectorAligned m_Delta;
+		VectorAligned m_StartOffset;
+		VectorAligned m_Extents;
+		bool m_IsRay;
+		bool m_IsSwept;
+		const void *m_pWorldAxisTransform;
+
+		void Init(const Vector &start, const Vector &end) {
+			m_Delta.x = end.x - start.x;
+			m_Delta.y = end.y - start.y;
+			m_Delta.z = end.z - start.z;
+			m_Delta.w = 0;
+			m_IsSwept = (m_Delta.x * m_Delta.x + m_Delta.y * m_Delta.y + m_Delta.z * m_Delta.z != 0);
+			m_Extents.x = m_Extents.y = m_Extents.z = m_Extents.w = 0;
+			m_pWorldAxisTransform = nullptr;
+			m_IsRay = true;
+			m_StartOffset.x = m_StartOffset.y = m_StartOffset.z = m_StartOffset.w = 0;
+			m_Start.x = start.x; m_Start.y = start.y; m_Start.z = start.z; m_Start.w = 0;
+		}
+	};
+
+	struct cplane_t {
+		Vector normal;
+		float dist;
+		unsigned char type;
+		unsigned char signbits;
+		unsigned char pad[2];
+	};
+
+	struct csurface_t {
+		const char *name;
+		short surfaceProps;
+		unsigned short flags;
+	};
+
+	struct trace_t {
+		Vector startpos;
+		Vector endpos;
+		cplane_t plane;
+		float fraction;
+		int contents;
+		unsigned short dispFlags;
+		bool allsolid;
+		bool startsolid;
+		float fractionleftsolid;
+		csurface_t surface;
+		int hitgroup;
+		short physicsbone;
+		unsigned short worldSurfaceIndex;
+		void *m_pEnt;
+		int hitbox;
+	};
+
+	class ITraceFilter {
+	public:
+		virtual bool ShouldHitEntity(void *pEntity, int contentsMask) = 0;
+		virtual int GetTraceType() const = 0;
+	};
+
+	class CTraceFilterWorldOnly : public ITraceFilter {
+	public:
+		virtual bool ShouldHitEntity(void *pEntity, int contentsMask) { return false; }
+		virtual int GetTraceType() const { return 1; } // TRACE_WORLD_ONLY = 1
+	};
+
+	class HL2Bridge
+	{
+	public:
+		static HL2Bridge& Get();
+
+		void Init();
+		void Tick();
+		void Shutdown();
+
+		bool IsInGame();
+		bool IsConnected();
+		bool IsPaused();
+		bool IsLevelMainMenuBackground();
+		bool IsDrawingLoadingImage();
+		bool HasPlayer();
+		bool IsInPlayableWorld();
+
+		bool ExecCmd(const char *cmd);
+		bool GetAngles(QAngle &angles);
+		bool GetPlayerPos(Vector &pos);
+		void SetGuiOpen(bool open);
+		bool IsGuiOpen() const { return m_guiOpen; }
+		bool GetCursorState(int &x, int &y) const { x = m_cursorX; y = m_cursorY; return m_guiOpen; }
+
+		HANDLE GetSharedMemoryHandle() const { return m_shmHandle; }
+		uint8_t* GetSharedMemoryView() const { return m_shmView; }
+
+		void PushInput(uint16_t type, uint16_t code, int32_t a, int32_t b = 0);
+		void PushTextInput(int32_t codepoint);
+		static LRESULT CALLBACK SubclassWndProc(HWND hwnd, UINT uMsg, WPARAM wParam, LPARAM lParam);
+		void HookWindow();
+		void UnhookWindow();
+		void HitPicker(int extraDmg = 20);
+		void HitCurrentTarget(int dmg = 35);
+		void* GetLocalPlayerEntity();
+		bool TraceWorldRay(const Vector &start, const Vector &end, trace_t &tr);
+		bool GetWorldToScreenMatrix(float outMat[16]);
+
+	private:
+		HL2Bridge();
+		~HL2Bridge();
+
+		void InitSharedMemory();
+		void UpdateHostState(const Vector &pos, const QAngle &angles);
+		void ScanCollision(const Vector &playerPos);
+		void ScanActors();
+		void ProcessEvents();
+		void ProcessInput();
+		void ComputeUnstickPos(const Vector &playerPos, int ibx, int iby, int ibz, Vector &outPos);
+
+		bool m_initialized = false;
+		void *m_engineClient = nullptr;
+		void *m_engineTrace = nullptr;
+		void *m_entityList = nullptr;
+		void *m_vguiSurface = nullptr;
+		void *m_engineVGui = nullptr;
+		void *m_cvar = nullptr;
+
+		HANDLE m_shmHandle = nullptr;
+		uint8_t *m_shmView = nullptr;
+
+		bool m_wasInWorld = false;
+		bool m_lastPosValid = false;
+		float m_lastPosX = 0, m_lastPosY = 0, m_lastPosZ = 0;
+		bool m_guiOpen = false;
+		bool m_creative = false;
+		uint32_t m_collisionEpoch = 1;
+		uint32_t m_teleportSeq = 0;
+		char m_lastMapName[64] = {0};
+		DWORD m_lastStripTime = 0;
+		DWORD m_lastColScanTime = 0;
+		DWORD m_lastActorScanTime = 0;
+		DWORD m_lastSpacePress = 0;
+		bool m_lastSpaceKey = false;
+		bool m_lastLButton = false;
+		bool m_lastRButton = false;
+		int m_lastMouseX = -1, m_lastMouseY = -1;
+		bool m_guiLBtn = false, m_guiRBtn = false;
+		Vector m_lastScanPos{0, 0, 0};
+		int m_lastCamMode = 0;
+		float m_lastCamDist = 0.0f;
+		bool m_keysDown[256] = {false};
+		bool m_lastSprinting = false;
+		bool m_mcWasDead = false;
+		int m_lastSyncedHp = -1;
+		int m_lastPlayerHl2Hp = 100;
+		int m_cursorX = 960;
+		int m_cursorY = 540;
+		int m_viewW = 1920;
+		int m_viewH = 1080;
+		HWND m_hValveWnd = nullptr;
+		WNDPROC m_oldWndProc = nullptr;
+		std::set<std::tuple<int, int, int>> m_placedBlocks;
+		DWORD m_lastBlockSyncTime = 0;
+		bool m_wasLoading = false;
+		float m_lastGameTime = 0.0f;
+		bool m_wasFlying = false;
+	};
+}

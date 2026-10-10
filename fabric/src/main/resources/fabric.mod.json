@@ -1,0 +1,24 @@
+{
+  "schemaVersion": 1,
+  "id": "hl2craft",
+  "version": "${version}",
+  "name": "HL2Craft",
+  "description": "Half-Life 2 x Minecraft clean integration with dynamic voxel collision, actor mirroring, and HUD passthrough.",
+  "authors": ["Maga"],
+  "license": "MIT",
+  "environment": "*",
+  "entrypoints": {
+    "main": ["dev.hl2craft.HL2Craft"],
+    "client": ["dev.hl2craft.client.HL2CraftClient"]
+  },
+  "mixins": [
+    "hl2craft.mixins.json",
+    { "config": "hl2craft.client.mixins.json", "environment": "client" }
+  ],
+  "depends": {
+    "fabricloader": ">=0.19.5",
+    "minecraft": "~26.3",
+    "java": ">=25",
+    "fabric-api": "*"
+  }
+}

@@ -1,0 +1,31 @@
+# Gradle & Java
+.gradle/
+**/build/
+!**/src/**/build/
+gradle-app.setting
+!gradle-wrapper.jar
+!gradle-wrapper.properties
+out/
+*.class
+*.log
+hs_err_pid*
+replay_pid*
+
+# C++ / MinGW build artifacts
+*.o
+*.obj
+*.exp
+*.lib
+*.pdb
+*.ilk
+*.exe
+
+# IDE & OS
+.idea/
+.vscode/
+*.iml
+*.ipr
+*.iws
+.DS_Store
+Thumbs.db
+hl2craft_path.txt
