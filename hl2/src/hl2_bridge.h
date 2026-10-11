@@ -166,14 +166,9 @@ namespace hl2craft
 
 		struct ActiveKnockback {
 			int entIndex;
-			Vector dir;
-			float stepSpeed;
 			DWORD startMs;
-			DWORD lastStepMs;
-			DWORD moveEndMs;
 			DWORD flashEndMs;
 			bool isCrit;
-			bool velocityCleared;
 		};
 		std::vector<ActiveKnockback> m_knockbacks;
 		int m_lastHitEntIndex = -1;

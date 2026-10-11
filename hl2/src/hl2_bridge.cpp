@@ -2181,125 +2181,85 @@ namespace hl2craft
 	void HL2Bridge::StartNpcKnockback(int entIndex, const Vector &entPos, const Vector &dir, float strength, bool isCrit, int applyDmg)
 	{
 		if (entIndex <= 1) return;
-		float len = std::sqrt(dir.x * dir.x + dir.y * dir.y);
-		if (len < 1e-4f) return;
-		Vector nDir{ dir.x / len, dir.y / len, 0.0f };
-
-		// Gentle subtle horizontal knockback speed (~0.35-0.4 blocks, matching vanilla Minecraft)
-		float clampedStr = std::clamp(strength, 0.35f, 1.4f);
-		float speed = clampedStr * 115.0f * (isCrit ? 1.35f : 1.0f);
 		DWORD now = GetTickCount();
-		DWORD moveDuration = isCrit ? 150 : 130;
 		DWORD flashDuration = 360;
 
-		// Check if this hit is a killing blow so ragdoll NEVER inherits red tint
-		bool willDie = false;
+		bool updated = false;
+		for (auto &kb : m_knockbacks) {
+			if (kb.entIndex == entIndex) {
+				kb.startMs = now;
+				kb.flashEndMs = now + flashDuration;
+				kb.isCrit = isCrit;
+				updated = true;
+				break;
+			}
+		}
+		if (!updated) {
+			if (m_knockbacks.size() >= 24) {
+				m_knockbacks.erase(m_knockbacks.begin());
+			}
+			m_knockbacks.push_back(ActiveKnockback{ entIndex, now, now + flashDuration, isCrit });
+		}
+
+		// Apply red damage flash immediately to client entity render color (+0x58)
 		if (m_entityList) {
 			void **evt = *(void***)m_entityList;
 			typedef void* (__thiscall *GetClientEntityFn)(void*, int);
 			GetClientEntityFn getClientEnt = (GetClientEntityFn)evt[3];
 			void *pClientEnt = getClientEnt(m_entityList, entIndex);
 			if (pClientEnt && pClientEnt != GetLocalPlayerEntity() && !IsBadReadPtr((char*)pClientEnt + 0x5C, 4)) {
-				static void *s_stInit = nullptr;
-				if (!s_stInit) {
-					HMODULE hServer = GetModuleHandleA("server.dll");
-					if (hServer) {
-						CreateInterfaceFn serverFactory = (CreateInterfaceFn)GetProcAddress(hServer, "CreateInterface");
-						if (serverFactory) s_stInit = serverFactory("VSERVERTOOLS001", nullptr);
-					}
-				}
-
-				void *pServerEnt = nullptr;
-				if (s_stInit && !IsBadReadPtr(s_stInit, sizeof(void*))) {
-					void **stVt = *(void***)s_stInit;
-					if (stVt && !IsBadReadPtr(stVt, sizeof(void*) * 14)) {
-						typedef void* (__thiscall *GetIServerEntityFn)(void*, void*);
-						pServerEnt = ((GetIServerEntityFn)stVt[1])(s_stInit, pClientEnt);
-					}
-				}
-
-				if (pServerEnt && !IsBadReadPtr(pServerEnt, 232)) {
-					int curHp = *(int*)((char*)pServerEnt + 224);
-					uint8_t lifeState = *((uint8_t*)pServerEnt + 228);
-					if (curHp <= (applyDmg + 8) || lifeState != 0 || curHp <= 0) {
-						willDie = true;
-					}
-				}
-
 				uint8_t *clr = (uint8_t*)pClientEnt + 0x58;
-				if (willDie) {
-					// Killing blow: ensure server and client colors are NORMAL so ragdoll spawns white!
-					clr[0] = 255; clr[1] = 255; clr[2] = 255; clr[3] = 255;
-					if (s_stInit && pServerEnt) {
-						typedef bool (__thiscall *SetKeyValueStrFn)(void*, void*, const char*, const char*);
-						typedef bool (__thiscall *SetKeyValueVecFn)(void*, void*, const char*, const Vector&);
-						void **stVt = *(void***)s_stInit;
-						*(uint32_t*)((char*)pServerEnt + 116) = 0xFFFFFFFF;
-						((SetKeyValueStrFn)stVt[13])(s_stInit, pServerEnt, "rendercolor", "255 255 255");
-						Vector zeroVel{ 0.0f, 0.0f, 0.0f };
-						((SetKeyValueVecFn)stVt[11])(s_stInit, pServerEnt, "basevelocity", zeroVel);
-						((SetKeyValueVecFn)stVt[11])(s_stInit, pServerEnt, "velocity", zeroVel);
-					}
-					ExecCmd("ent_fire prop_ragdoll* Color \"255 255 255\"; ent_fire prop_ragdoll* addoutput \"rendercolor 255 255 255\";");
-				} else {
-					// Surviving NPC: apply red damage flash
-					uint8_t gb = isCrit ? 40 : 62;
-					clr[0] = 255; clr[1] = gb; clr[2] = gb; clr[3] = 255;
-					if (s_stInit && pServerEnt) {
-						typedef bool (__thiscall *SetKeyValueStrFn)(void*, void*, const char*, const char*);
-						void **stVt = *(void***)s_stInit;
-						((SetKeyValueStrFn)stVt[13])(s_stInit, pServerEnt, "rendercolor", isCrit ? "255 40 40" : "255 62 62");
-					}
-				}
+				uint8_t gb = isCrit ? 40 : 62;
+				clr[0] = 255; clr[1] = gb; clr[2] = gb; clr[3] = 255;
 			}
 		}
 
-		if (willDie) {
-			// Dying entity will be converted to ragdoll; remove from active list if present
-			for (auto it = m_knockbacks.begin(); it != m_knockbacks.end(); ++it) {
-				if (it->entIndex == entIndex) {
-					m_knockbacks.erase(it);
-					break;
-				}
-			}
-		} else {
-			bool updated = false;
-			for (auto &kb : m_knockbacks) {
-				if (kb.entIndex == entIndex) {
-					kb.dir = nDir;
-					kb.stepSpeed = speed;
-					kb.startMs = now;
-					kb.lastStepMs = now;
-					kb.moveEndMs = now + moveDuration;
-					kb.flashEndMs = now + flashDuration;
-					kb.isCrit = isCrit;
-					kb.velocityCleared = false;
-					updated = true;
-					break;
-				}
-			}
-			if (!updated) {
-				if (m_knockbacks.size() >= 24) {
-					m_knockbacks.erase(m_knockbacks.begin());
-				}
-				m_knockbacks.push_back(ActiveKnockback{ entIndex, nDir, speed, now, now, now + moveDuration, now + flashDuration, isCrit, false });
-			}
-		}
+		// Horizontal-only subtle point_push: pitch = 0 (angles 0 yaw 0), ground-level Z, spawnflags 4 (linear falloff, never floats)
+		float len = std::sqrt(dir.x * dir.x + dir.y * dir.y);
+		if (len > 1e-4f) {
+			Vector nDir{ dir.x / len, dir.y / len, 0.0f };
+			static uint32_t s_kbPushCounter = 0;
+			uint32_t pushId = ++s_kbPushCounter;
+			float pushX = entPos.x - nDir.x * 16.0f;
+			float pushY = entPos.y - nDir.y * 16.0f;
+			float pushZ = entPos.z;
+			float yaw = std::atan2(nDir.y, nDir.x) * 180.0f / 3.14159265f;
+			int mag = isCrit ? 56 : 40; // Soft knockback (~0.35-0.4 blocks)
 
-		// Crit visual effect only (env_spark) — no point_push to avoid disrupting NPC physics/gravity!
-		if (isCrit) {
-			static uint32_t s_crtCounter = 0;
-			uint32_t sparkId = ++s_crtCounter;
-			char cmd[320];
-			snprintf(cmd, sizeof(cmd),
-				"ent_create env_spark targetname mc_crt_%u; "
-				"ent_fire mc_crt_%u addoutput \"origin %.2f %.2f %.2f\"; "
-				"ent_fire mc_crt_%u addoutput \"Magnitude 2\"; "
-				"ent_fire mc_crt_%u addoutput \"TrailLength 2\"; "
-				"ent_fire mc_crt_%u SparkOnce; "
-				"ent_fire mc_crt_%u Kill \"\" 0.1",
-				sparkId, sparkId, entPos.x, entPos.y, entPos.z + 40.0f,
-				sparkId, sparkId, sparkId, sparkId);
+			char cmd[512];
+			if (isCrit) {
+				snprintf(cmd, sizeof(cmd),
+					"ent_create point_push targetname mc_kbp_%u; "
+					"ent_fire mc_kbp_%u addoutput \"origin %.2f %.2f %.2f\"; "
+					"ent_fire mc_kbp_%u addoutput \"angles 0 %.2f 0\"; "
+					"ent_fire mc_kbp_%u addoutput \"magnitude %d\"; "
+					"ent_fire mc_kbp_%u addoutput \"radius 44\"; "
+					"ent_fire mc_kbp_%u addoutput \"spawnflags 4\"; "
+					"ent_fire mc_kbp_%u Enable; "
+					"ent_fire mc_kbp_%u Kill \"\" 0.08; "
+					"ent_create env_spark targetname mc_crt_%u; "
+					"ent_fire mc_crt_%u addoutput \"origin %.2f %.2f %.2f\"; "
+					"ent_fire mc_crt_%u addoutput \"Magnitude 2\"; "
+					"ent_fire mc_crt_%u addoutput \"TrailLength 2\"; "
+					"ent_fire mc_crt_%u SparkOnce; "
+					"ent_fire mc_crt_%u Kill \"\" 0.1",
+					pushId, pushId, pushX, pushY, pushZ,
+					pushId, yaw, pushId, mag, pushId, pushId, pushId, pushId,
+					pushId, pushId, entPos.x, entPos.y, entPos.z + 40.0f,
+					pushId, pushId, pushId, pushId);
+			} else {
+				snprintf(cmd, sizeof(cmd),
+					"ent_create point_push targetname mc_kbp_%u; "
+					"ent_fire mc_kbp_%u addoutput \"origin %.2f %.2f %.2f\"; "
+					"ent_fire mc_kbp_%u addoutput \"angles 0 %.2f 0\"; "
+					"ent_fire mc_kbp_%u addoutput \"magnitude %d\"; "
+					"ent_fire mc_kbp_%u addoutput \"radius 44\"; "
+					"ent_fire mc_kbp_%u addoutput \"spawnflags 4\"; "
+					"ent_fire mc_kbp_%u Enable; "
+					"ent_fire mc_kbp_%u Kill \"\" 0.08",
+					pushId, pushId, pushX, pushY, pushZ,
+					pushId, yaw, pushId, mag, pushId, pushId, pushId, pushId);
+			}
 			ExecCmd(cmd);
 		}
 	}
@@ -2311,27 +2271,6 @@ namespace hl2craft
 			return;
 		}
 
-		static void *s_serverTools = nullptr;
-		if (!s_serverTools) {
-			HMODULE hServer = GetModuleHandleA("server.dll");
-			if (hServer) {
-				CreateInterfaceFn serverFactory = (CreateInterfaceFn)GetProcAddress(hServer, "CreateInterface");
-				if (serverFactory) {
-					s_serverTools = serverFactory("VSERVERTOOLS001", nullptr);
-				}
-			}
-		}
-		if (!s_serverTools || IsBadReadPtr(s_serverTools, sizeof(void*))) return;
-		void **stVt = *(void***)s_serverTools;
-		if (!stVt || IsBadReadPtr(stVt, sizeof(void*) * 14)) return;
-
-		typedef void* (__thiscall *GetIServerEntityFn)(void*, void*);
-		typedef bool (__thiscall *SetKeyValueVecFn)(void*, void*, const char*, const Vector&);
-		typedef bool (__thiscall *SetKeyValueStrFn)(void*, void*, const char*, const char*);
-		GetIServerEntityFn getServerEnt = (GetIServerEntityFn)stVt[1];
-		SetKeyValueVecFn setKeyVec = (SetKeyValueVecFn)stVt[11];
-		SetKeyValueStrFn setKeyStr = (SetKeyValueStrFn)stVt[13];
-
 		void **evt = *(void***)m_entityList;
 		typedef void* (__thiscall *GetClientEntityFn)(void*, int);
 		GetClientEntityFn getClientEnt = (GetClientEntityFn)evt[3];
@@ -2341,21 +2280,15 @@ namespace hl2craft
 		for (auto it = m_knockbacks.begin(); it != m_knockbacks.end(); ) {
 			void *pClientEnt = getClientEnt(m_entityList, it->entIndex);
 			bool validClientEnt = (pClientEnt && pClientEnt != pPlayerEnt && !IsBadReadPtr((char*)pClientEnt + 0x5C, 4));
-			void *pServerEnt = validClientEnt ? getServerEnt(s_serverTools, pClientEnt) : nullptr;
-			if (pServerEnt && IsBadReadPtr(pServerEnt, 232)) {
-				pServerEnt = nullptr;
-			}
 
-			// If NPC died during flash, immediately reset color, clear velocities, and remove from active list
 			bool isDead = false;
-			if (pServerEnt) {
-				int curHp = *(int*)((char*)pServerEnt + 224);
-				uint8_t lifeState = *((uint8_t*)pServerEnt + 228);
-				if (curHp <= 0 || lifeState != 0) {
+			if (!validClientEnt) {
+				isDead = true;
+			} else if (!IsBadReadPtr((char*)pClientEnt + 0x8F, 4)) {
+				uint8_t lifeState = *(uint8_t*)((char*)pClientEnt + 0x8F);
+				if (lifeState != 0) {
 					isDead = true;
 				}
-			} else if (!validClientEnt) {
-				isDead = true;
 			}
 
 			if (isDead || now >= it->flashEndMs) {
@@ -2366,14 +2299,9 @@ namespace hl2craft
 					clr[2] = 255;
 					clr[3] = 255;
 				}
-				if (pServerEnt) {
-					*(uint32_t*)((char*)pServerEnt + 116) = 0xFFFFFFFF;
-					setKeyStr(s_serverTools, pServerEnt, "rendercolor", "255 255 255");
-					Vector zeroVel{ 0.0f, 0.0f, 0.0f };
-					setKeyVec(s_serverTools, pServerEnt, "basevelocity", zeroVel);
-					setKeyVec(s_serverTools, pServerEnt, "velocity", zeroVel);
+				if (isDead) {
+					ExecCmd("ent_fire prop_ragdoll* Color \"255 255 255\"; ent_fire prop_ragdoll* addoutput \"rendercolor 255 255 255\";");
 				}
-				ExecCmd("ent_fire prop_ragdoll* Color \"255 255 255\"; ent_fire prop_ragdoll* addoutput \"rendercolor 255 255 255\";");
 				it = m_knockbacks.erase(it);
 				continue;
 			}
@@ -2393,104 +2321,6 @@ namespace hl2craft
 				clr[2] = curGb;
 				clr[3] = 255;
 			}
-			if (pServerEnt) {
-				if (elapsedFlash <= 240) {
-					setKeyStr(s_serverTools, pServerEnt, "rendercolor", it->isCrit ? "255 40 40" : "255 62 62");
-				} else {
-					setKeyStr(s_serverTools, pServerEnt, "rendercolor", "255 150 150");
-				}
-			}
-
-			// Once horizontal movement window ends, ensure basevelocity is zeroed out
-			if (now >= it->moveEndMs) {
-				if (!it->velocityCleared) {
-					it->velocityCleared = true;
-					if (pServerEnt) {
-						Vector zeroVel{ 0.0f, 0.0f, 0.0f };
-						setKeyVec(s_serverTools, pServerEnt, "basevelocity", zeroVel);
-						setKeyVec(s_serverTools, pServerEnt, "velocity", zeroVel);
-					}
-				}
-				++it;
-				continue;
-			}
-
-			float dt = (now - it->lastStepMs) * 0.001f;
-			if (dt < 0.008f) {
-				++it;
-				continue;
-			}
-			if (dt > 0.05f) dt = 0.05f;
-			it->lastStepMs = now;
-
-			void *renderable = (char*)pClientEnt + 4;
-			if (IsBadReadPtr(renderable, sizeof(void*))) {
-				++it;
-				continue;
-			}
-			void **rendVt = *(void***)renderable;
-			if (IsBadReadPtr(rendVt, sizeof(void*) * 2)) {
-				++it;
-				continue;
-			}
-			typedef const float* (__thiscall *GetOriginFn)(void*);
-			const float *org = ((GetOriginFn)rendVt[1])(renderable);
-			if (!org || IsBadReadPtr(org, sizeof(float) * 3)) {
-				++it;
-				continue;
-			}
-			Vector curPos{ org[0], org[1], org[2] };
-
-			float totalDur = (float)std::max<DWORD>(1, it->moveEndMs - it->startMs);
-			float t = std::clamp((float)(now - it->startMs) / totalDur, 0.0f, 1.0f);
-			float horizSpeed = it->stepSpeed * (1.15f - 0.65f * t);
-
-			// PURE HORIZONTAL displacement: keep curPos.z exactly intact so FL_ONGROUND is never lost!
-			Vector nextPos{
-				curPos.x + it->dir.x * horizSpeed * dt,
-				curPos.y + it->dir.y * horizSpeed * dt,
-				curPos.z
-			};
-
-			// Check wall collision with hull trace so knocked-back NPCs never clip into walls
-			if (m_engineTrace) {
-				void **trVt = *(void***)m_engineTrace;
-				if (trVt && trVt[4]) {
-					typedef void (__thiscall *TraceRayFn)(void*, const Ray_t&, unsigned int, ITraceFilter*, trace_t*);
-					TraceRayFn traceRay = (TraceRayFn)trVt[4];
-					CTraceFilterWorldOnly worldFilter;
-					Ray_t ray;
-					Vector mins{ -16.0f, -16.0f, 12.0f };
-					Vector maxs{ 16.0f, 16.0f, 64.0f };
-					ray.InitHull(curPos, nextPos, mins, maxs);
-					trace_t tr;
-					std::memset(&tr, 0, sizeof(tr));
-					traceRay(m_engineTrace, ray, 0x200400B, &worldFilter, &tr);
-					if (tr.startsolid) {
-						nextPos.x = curPos.x;
-						nextPos.y = curPos.y;
-					} else if (tr.fraction < 1.0f) {
-						nextPos.x = curPos.x + (nextPos.x - curPos.x) * tr.fraction * 0.85f;
-						nextPos.y = curPos.y + (nextPos.y - curPos.y) * tr.fraction * 0.85f;
-					}
-				}
-			}
-
-			// Also avoid pushing NPC inside player-placed Minecraft blocks
-			int nbx = (int)std::floor(nextPos.x * proto::kMetersPerUnit);
-			int nby = (int)std::floor(nextPos.z * proto::kMetersPerUnit + 64.0);
-			int nbz = (int)std::floor(-nextPos.y * proto::kMetersPerUnit);
-			if (m_placedBlocks.find({nbx, nby, nbz}) != m_placedBlocks.end() ||
-			    m_placedBlocks.find({nbx, nby + 1, nbz}) != m_placedBlocks.end()) {
-				nextPos.x = curPos.x;
-				nextPos.y = curPos.y;
-			}
-
-			// Apply origin directly and ensure basevelocity/velocity remain zeroed out
-			setKeyVec(s_serverTools, pServerEnt, "origin", nextPos);
-			Vector zeroVel{ 0.0f, 0.0f, 0.0f };
-			setKeyVec(s_serverTools, pServerEnt, "basevelocity", zeroVel);
-			setKeyVec(s_serverTools, pServerEnt, "velocity", zeroVel);
 
 			++it;
 		}
