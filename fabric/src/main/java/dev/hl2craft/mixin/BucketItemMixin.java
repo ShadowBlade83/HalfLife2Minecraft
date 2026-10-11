@@ -25,6 +25,7 @@ public abstract class BucketItemMixin {
 	@Inject(method = "emptyContents", at = @At("RETURN"))
 	private void hl2craft$trackLavaPlaced(LivingEntity entity, Level level, BlockPos pos, BlockHitResult hitResult, CallbackInfoReturnable<Boolean> cir) {
 		if (HL2Link.active() && cir.getReturnValue() && this.content == Fluids.LAVA) {
+			dev.hl2craft.world.HL2Collision.trackPlacedBlock(pos);
 			HL2Link.pushEvent(Proto.EV_BLOCK_PLACED, 0, pos.getX(), pos.getY(), pos.getZ(), 15.0f, 1, 0);
 		}
 	}

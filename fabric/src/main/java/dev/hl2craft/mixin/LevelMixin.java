@@ -16,9 +16,8 @@ public abstract class LevelMixin {
 	@Inject(method = "setBlock(Lnet/minecraft/core/BlockPos;Lnet/minecraft/world/level/block/state/BlockState;II)Z", at = @At("RETURN"))
 	private void hl2craft$onSetBlock(BlockPos pos, BlockState state, int flags, int maxUpdateDepth, CallbackInfoReturnable<Boolean> cir) {
 		if (HL2Link.active() && Boolean.TRUE.equals(cir.getReturnValue()) && state.isAir()) {
-			if (HL2Collision.untrackPlacedBlock(pos)) {
-				HL2Link.pushEvent(Proto.EV_BLOCK_BROKEN, 0, pos.getX(), pos.getY(), pos.getZ(), 0.0f, 0, 0);
-			}
+			HL2Collision.untrackPlacedBlock(pos);
+			HL2Link.pushEvent(Proto.EV_BLOCK_BROKEN, 0, pos.getX(), pos.getY(), pos.getZ(), 0.0f, 0, 0);
 		}
 	}
 }

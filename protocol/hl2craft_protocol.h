@@ -170,6 +170,7 @@ namespace hl2craft::proto
 		kActorDead      = 1u << 1,
 		kActorFriend    = 1u << 2,
 		kActorInCombat  = 1u << 3,
+		kActorArmed     = 1u << 4,
 	};
 
 	struct ActorRecord

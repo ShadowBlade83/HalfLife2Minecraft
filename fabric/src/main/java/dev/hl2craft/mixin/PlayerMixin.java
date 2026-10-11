@@ -81,13 +81,13 @@ public abstract class PlayerMixin {
 
 				if (teleportChanged || snap.hl2PhysicsOverride()) {
 					if (teleportChanged) {
-						net.minecraft.world.phys.Vec3 oldDm = sp.getDeltaMovement();
-						sp.teleportTo(serverLevel, snap.x(), feetY, snap.z(), java.util.Collections.emptySet(), snap.yaw(), snap.pitch(), true);
 						double dPosSq = sp.position().distanceToSqr(snap.x(), feetY, snap.z());
-						if (dPosSq < 0.6 * 0.6) {
-							sp.setDeltaMovement(oldDm.x * 0.5, oldDm.y, oldDm.z * 0.5);
-						} else {
+						if (dPosSq > 1.0) {
+							sp.teleportTo(serverLevel, snap.x(), feetY, snap.z(), java.util.Collections.emptySet(), snap.yaw(), snap.pitch(), true);
 							sp.setDeltaMovement(net.minecraft.world.phys.Vec3.ZERO);
+							if (sp.connection != null) {
+								sp.connection.resetPosition();
+							}
 						}
 					} else {
 						sp.setPos(snap.x(), feetY, snap.z());
@@ -111,9 +111,6 @@ public abstract class PlayerMixin {
 					}
 				}
 				serverLevel.getChunkSource().move(sp);
-				if (sp.connection != null) {
-					sp.connection.resetPosition();
-				}
 		}
 	}
 

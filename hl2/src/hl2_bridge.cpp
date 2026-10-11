@@ -898,7 +898,7 @@ namespace hl2craft
 					if (pushedOut) {
 						float pdx = sx - targetPos.x;
 						float pdy = sy - targetPos.y;
-						if (pdx * pdx + pdy * pdy > 16.0f) {
+						if (pdx * pdx + pdy * pdy > 64.0f * 64.0f) {
 							double corrMcX = sx * proto::kMetersPerUnit;
 							double corrMcZ = -sy * proto::kMetersPerUnit;
 							double corrMcFeetY = (sz * proto::kMetersPerUnit) + kYOffset - eyeOffsetBlocks;
@@ -948,43 +948,43 @@ namespace hl2craft
 						if (dl) {
 							dl->flags = 0;
 							dl->origin = Vector{ sx, sy, sz + 42.0f };
-							dl->radius = 280.0f * ((float)ms->heldLight / 15.0f);
+							dl->radius = 170.0f * ((float)ms->heldLight / 15.0f);
 							if (ms->heldLightType == 2) {
-								dl->color.r = 60; dl->color.g = 200; dl->color.b = 255; dl->color.exponent = 3;
+								dl->color.r = 60; dl->color.g = 200; dl->color.b = 255; dl->color.exponent = 0;
 							} else {
-								dl->color.r = 255; dl->color.g = 180; dl->color.b = 75; dl->color.exponent = 3;
+								dl->color.r = 255; dl->color.g = 180; dl->color.b = 75; dl->color.exponent = 0;
 							}
-							dl->die = m_lastGameTime + 0.15f;
-							dl->decay = dl->radius / 0.15f;
+							dl->die = m_lastGameTime + 0.25f;
+							dl->decay = 0.0f;
 							dl->minlight = 4.0f;
 						}
 					}
 
 					// 2. Placed torches, lanterns, campfires, and lava
 					if (!m_placedLights.empty()) {
-						int lightKeyBase = 2000;
 						int activeCount = 0;
 						for (const auto &pl : m_placedLights) {
-							if (activeCount >= 16) break;
+							if (activeCount >= 24) break;
 							float lx = (pl.bx + 0.5f) * (float)proto::kUnitsPerBlock;
 							float ly = -(pl.bz + 0.5f) * (float)proto::kUnitsPerBlock;
 							float lz = (pl.by + 0.5f - 64.0f) * (float)proto::kUnitsPerBlock;
 							float dx = lx - sx, dy = ly - sy, dz = lz - sz;
 							if (dx * dx + dy * dy + dz * dz > 750.0f * 750.0f) continue;
+							activeCount++;
 
-							int key = lightKeyBase + (++activeCount);
+							int key = 2000 + (int)(((pl.bx * 73856093) ^ (pl.by * 19349663) ^ (pl.bz * 83492791)) & 0x0FFF);
 							dlight_t *dl = allocDlight(s_effects, key);
 							if (dl) {
 								dl->flags = 0;
 								dl->origin = Vector{ lx, ly, lz };
-								dl->radius = 230.0f * ((float)pl.lightLevel / 15.0f);
+								dl->radius = 150.0f * ((float)pl.lightLevel / 15.0f);
 								if (pl.lightType == 2) {
-									dl->color.r = 60; dl->color.g = 200; dl->color.b = 255; dl->color.exponent = 3;
+									dl->color.r = 60; dl->color.g = 200; dl->color.b = 255; dl->color.exponent = 0;
 								} else {
-									dl->color.r = 255; dl->color.g = 175; dl->color.b = 70; dl->color.exponent = 3;
+									dl->color.r = 255; dl->color.g = 175; dl->color.b = 70; dl->color.exponent = 0;
 								}
-								dl->die = m_lastGameTime + 0.15f;
-								dl->decay = dl->radius / 0.15f;
+								dl->die = m_lastGameTime + 0.25f;
+								dl->decay = 0.0f;
 								dl->minlight = 4.0f;
 							}
 						}
@@ -1647,9 +1647,41 @@ namespace hl2craft
 				}
 			}
 
+			bool isFriend = (strstr(className, "Citizen") != nullptr ||
+			                 strstr(className, "Barney") != nullptr ||
+			                 strstr(className, "Alyx") != nullptr ||
+			                 strstr(className, "Vortigaunt") != nullptr ||
+			                 strstr(className, "Monk") != nullptr ||
+			                 strstr(className, "Eli") != nullptr ||
+			                 strstr(className, "Kleiner") != nullptr ||
+			                 strstr(className, "Mossman") != nullptr ||
+			                 strstr(className, "Dog") != nullptr);
+
+			bool isArmed = false;
+			if (strstr(className, "Combine") != nullptr ||
+			    strstr(className, "MetroPolice") != nullptr ||
+			    strstr(className, "Hunter") != nullptr ||
+			    strstr(className, "Turret") != nullptr ||
+			    strstr(className, "Strider") != nullptr ||
+			    strstr(className, "Gunship") != nullptr ||
+			    strstr(className, "Helicopter") != nullptr ||
+			    strstr(className, "Sniper") != nullptr) {
+				isArmed = true;
+			} else if (!IsBadReadPtr((char*)ent + 0xDE8, 4)) {
+				uint32_t hActiveWpn = *(uint32_t*)((char*)ent + 0xDE8);
+				if (hActiveWpn != 0xFFFFFFFF && hActiveWpn != 0) {
+					isArmed = true;
+				}
+			}
+
+			uint32_t actorFlags = isFriend ? proto::kActorFriend : proto::kActorHostile;
+			if (isArmed) {
+				actorFlags |= proto::kActorArmed;
+			}
+
 			proto::ActorRecord &rec = tbl->actors[count];
 			rec.entIndex = i;
-			rec.flags = proto::kActorHostile;
+			rec.flags = actorFlags;
 			rec.x = org[0] * (float)proto::kMetersPerUnit;
 			rec.y = (org[2] * (float)proto::kMetersPerUnit) + (float)kYOffset;
 			rec.z = -org[1] * (float)proto::kMetersPerUnit;
@@ -1670,7 +1702,8 @@ namespace hl2craft
 			rec.height = h;
 			rec.healthFrac = 1.0f;
 			rec.classId = 0;
-			rec.name[0] = '\0';
+			strncpy(rec.name, className, sizeof(rec.name) - 1);
+			rec.name[sizeof(rec.name) - 1] = '\0';
 			count++;
 		}
 
@@ -2241,60 +2274,31 @@ namespace hl2craft
 			m_knockbacks.push_back(ActiveKnockback{ entIndex, entPos, now, now + flashDuration, isCrit });
 		}
 
-		// Apply red damage flash immediately to client entity render color (+0x58)
-		if (m_entityList) {
-			void **evt = *(void***)m_entityList;
-			typedef void* (__thiscall *GetClientEntityFn)(void*, int);
-			GetClientEntityFn getClientEnt = (GetClientEntityFn)evt[3];
-			void *pClientEnt = getClientEnt(m_entityList, entIndex);
-			if (pClientEnt && pClientEnt != GetLocalPlayerEntity() && !IsBadReadPtr((char*)pClientEnt + 0x5C, 4)) {
-				uint8_t *clr = (uint8_t*)pClientEnt + 0x58;
-				uint8_t gb = isCrit ? 40 : 62;
-				clr[0] = 255; clr[1] = gb; clr[2] = gb; clr[3] = 255;
-			}
-		}
-
 		float len = std::sqrt(dir.x * dir.x + dir.y * dir.y);
 		if (len > 1e-4f) {
 			Vector nDir{ dir.x / len, dir.y / len, 0.0f };
 			static uint32_t s_pushCounter = 0;
 			uint32_t pushId = ++s_pushCounter;
 			Vector pushPos{
-				entPos.x - nDir.x * 20.0f,
-				entPos.y - nDir.y * 20.0f,
-				entPos.z + 16.0f
+				entPos.x - nDir.x * 24.0f,
+				entPos.y - nDir.y * 24.0f,
+				entPos.z + 4.0f
 			};
-			int mag = isCrit ? 60 : 42;
-			if (strength > 0.8f) mag = (int)(mag * 1.25f);
+			int mag = isCrit ? 260 : 190;
+			if (strength > 0.8f) mag = (int)(mag * 1.3f);
 
 			char cmd[320];
 			snprintf(cmd, sizeof(cmd),
 				"ent_create point_push targetname mc_kbp_%u; "
 				"ent_fire mc_kbp_%u addoutput \"origin %.2f %.2f %.2f\"; "
 				"ent_fire mc_kbp_%u addoutput \"magnitude %d\"; "
-				"ent_fire mc_kbp_%u addoutput \"radius 48\"; "
-				"ent_fire mc_kbp_%u addoutput \"spawnflags 8\"; "
+				"ent_fire mc_kbp_%u addoutput \"radius 64\"; "
+				"ent_fire mc_kbp_%u addoutput \"spawnflags 28\"; "
 				"ent_fire mc_kbp_%u Enable; "
-				"ent_fire mc_kbp_%u Kill \"\" 0.05",
+				"ent_fire mc_kbp_%u Kill \"\" 0.08",
 				pushId, pushId, pushPos.x, pushPos.y, pushPos.z,
 				pushId, mag, pushId, pushId, pushId, pushId);
 			ExecCmd(cmd);
-
-			if (isCrit) {
-				static uint32_t s_critSparkCounter = 0;
-				uint32_t sparkId = ++s_critSparkCounter;
-				char sparkCmd[256];
-				snprintf(sparkCmd, sizeof(sparkCmd),
-					"ent_create env_spark targetname mc_crt_%u; "
-					"ent_fire mc_crt_%u addoutput \"origin %.2f %.2f %.2f\"; "
-					"ent_fire mc_crt_%u addoutput \"Magnitude 2\"; "
-					"ent_fire mc_crt_%u addoutput \"TrailLength 2\"; "
-					"ent_fire mc_crt_%u SparkOnce; "
-					"ent_fire mc_crt_%u Kill \"\" 0.1",
-					sparkId, sparkId, entPos.x, entPos.y, entPos.z + 40.0f,
-					sparkId, sparkId, sparkId, sparkId);
-				ExecCmd(sparkCmd);
-			}
 		}
 	}
 
@@ -2328,60 +2332,18 @@ namespace hl2craft
 			if (isDead || now >= it->flashEndMs) {
 				if (validClientEnt) {
 					uint8_t *clr = (uint8_t*)pClientEnt + 0x58;
-					clr[0] = 255;
-					clr[1] = 255;
-					clr[2] = 255;
-					clr[3] = 255;
+					clr[0] = 255; clr[1] = 255; clr[2] = 255; clr[3] = 255;
 				}
 				if (isDead) {
-					typedef int (__thiscall *GetHighestEntityIndexFn)(void*);
-					GetHighestEntityIndexFn getHighest = (GetHighestEntityIndexFn)evt[6];
-					int maxEnts = getHighest ? getHighest(m_entityList) : 256;
-					if (maxEnts > 2048) maxEnts = 2048;
-					for (int i = 1; i <= maxEnts; ++i) {
-						void *ent = getClientEnt(m_entityList, i);
-						if (ent && ent != pPlayerEnt && !IsBadReadPtr((char*)ent + 0x5C, 4)) {
-							uint8_t *clr = (uint8_t*)ent + 0x58;
-							if (clr[0] == 255 && (clr[1] < 255 || clr[2] < 255)) {
-								void *r = (char*)ent + 4;
-								if (!IsBadReadPtr(r, sizeof(void*))) {
-									void **rv = *(void***)r;
-									if (!IsBadReadPtr(rv, sizeof(void*) * 2)) {
-										typedef const float* (__thiscall *GetOriginFn)(void*);
-										const float *org = ((GetOriginFn)rv[1])(r);
-										if (org && !IsBadReadPtr(org, sizeof(float) * 3)) {
-											float dx = org[0] - it->lastPos.x;
-											float dy = org[1] - it->lastPos.y;
-											float dz = org[2] - it->lastPos.z;
-											if (dx*dx + dy*dy + dz*dz < 200.0f * 200.0f) {
-												clr[0] = 255; clr[1] = 255; clr[2] = 255; clr[3] = 255;
-											}
-										}
-									}
-								}
-							}
-						}
-					}
 					ExecCmd("ent_fire prop_ragdoll* Color \"255 255 255\"; ent_fire prop_ragdoll* addoutput \"rendercolor 255 255 255\";");
 				}
 				it = m_knockbacks.erase(it);
 				continue;
 			}
 
-			// Update red hurt tint every frame while flash is active on living NPC
-			DWORD elapsedFlash = now - it->startMs;
-			uint8_t baseGb = it->isCrit ? 40 : 62;
-			uint8_t curGb = baseGb;
-			if (elapsedFlash > 200) {
-				float fadeT = std::clamp((float)(elapsedFlash - 200) / 120.0f, 0.0f, 1.0f);
-				curGb = (uint8_t)std::round(baseGb + (255.0f - baseGb) * fadeT);
-			}
 			if (validClientEnt) {
 				uint8_t *clr = (uint8_t*)pClientEnt + 0x58;
-				clr[0] = 255;
-				clr[1] = curGb;
-				clr[2] = curGb;
-				clr[3] = 255;
+				clr[0] = 255; clr[1] = 255; clr[2] = 255; clr[3] = 255;
 			}
 
 			++it;

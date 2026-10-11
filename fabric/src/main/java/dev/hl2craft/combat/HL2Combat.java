@@ -118,6 +118,7 @@ public final class HL2Combat {
 				proxy.setSize(a.width(), a.height());
 				proxy.snapTo(a.x(), targetY, a.z(), a.yaw(), 0.0F);
 				proxy.setCustomNameVisible(false);
+				proxy.setActorInfo(a.flags(), a.name());
 				if (!level.addFreshEntity(proxy)) {
 					continue;
 				}
@@ -128,6 +129,7 @@ public final class HL2Combat {
 			proxy.setPos(a.x(), targetY, a.z());
 			proxy.setYRot(a.yaw());
 			proxy.setYHeadRot(a.yaw());
+			proxy.setActorInfo(a.flags(), a.name());
 		}
 	}
 }

@@ -128,6 +128,7 @@ public final class Proto {
 	public static final int ACTOR_DEAD = 2;
 	public static final int ACTOR_FRIEND = 4;
 	public static final int ACTOR_IN_COMBAT = 8;
+	public static final int ACTOR_ARMED = 16;
 
 	// Event ring
 	public static final int EVENT_RING_ENTRIES = 512;

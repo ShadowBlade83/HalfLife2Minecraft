@@ -1,6 +1,7 @@
 package dev.hl2craft.combat;
 
 import dev.hl2craft.link.Proto;
+import java.util.List;
 import net.minecraft.network.syncher.EntityDataAccessor;
 import net.minecraft.network.syncher.EntityDataSerializers;
 import net.minecraft.network.syncher.SynchedEntityData;
@@ -13,6 +14,7 @@ import net.minecraft.world.entity.EntityType;
 import net.minecraft.world.entity.HumanoidArm;
 import net.minecraft.world.entity.LivingEntity;
 import net.minecraft.world.entity.Pose;
+import net.minecraft.world.entity.animal.golem.IronGolem;
 import net.minecraft.world.entity.projectile.Projectile;
 import net.minecraft.world.item.ItemStack;
 import net.minecraft.world.item.Items;
@@ -29,6 +31,9 @@ public class HL2ActorEntity extends LivingEntity {
 	private double pushX, pushZ;
 	private float pushStrength;
 	private boolean hitThisTick;
+	private int actorFlags;
+	private String actorName = "";
+	private int shootCooldown = 0;
 
 	public HL2ActorEntity(EntityType<? extends HL2ActorEntity> type, Level level) {
 		super(type, level);
@@ -109,6 +114,23 @@ public class HL2ActorEntity extends LivingEntity {
 		return EntityDimensions.scalable(w, h).withEyeHeight(eye);
 	}
 
+	public boolean isHostile() {
+		return (this.actorFlags & Proto.ACTOR_HOSTILE) != 0;
+	}
+
+	public boolean isFriend() {
+		return (this.actorFlags & Proto.ACTOR_FRIEND) != 0;
+	}
+
+	public boolean isArmed() {
+		return (this.actorFlags & Proto.ACTOR_ARMED) != 0;
+	}
+
+	public void setActorInfo(int flags, String name) {
+		this.actorFlags = flags;
+		this.actorName = (name != null) ? name : "";
+	}
+
 	@Override
 	public HumanoidArm getMainArm() {
 		return HumanoidArm.RIGHT;
@@ -129,6 +151,80 @@ public class HL2ActorEntity extends LivingEntity {
 				this.pendingFlags |= Proto.HIT_ON_FIRE;
 				this.hitThisTick = true;
 				this.setRemainingFireTicks(160);
+			}
+
+			// Armed NPCs defend themselves against hostile mobs
+			if (this.isAlive() && this.isArmed()) {
+				if (this.shootCooldown > 0) {
+					this.shootCooldown--;
+				} else {
+					ServerLevel sl = (ServerLevel) this.level();
+					double radius = 14.0;
+					net.minecraft.world.phys.AABB box = this.getBoundingBox().inflate(radius, 6.0, radius);
+					LivingEntity bestTarget = null;
+					double bestDistSq = radius * radius;
+
+					List<LivingEntity> nearby = sl.getEntitiesOfClass(LivingEntity.class, box, e -> {
+						if (e == this || !e.isAlive()) return false;
+						if (this.isFriend()) {
+							if (e instanceof net.minecraft.world.entity.monster.Enemy) return true;
+							if (e instanceof HL2ActorEntity other && other.isHostile()) return true;
+						} else if (this.isHostile()) {
+							if (e instanceof net.minecraft.world.entity.monster.Enemy) return true;
+							if (e instanceof IronGolem) return true;
+							if (e instanceof HL2ActorEntity other && other.isFriend()) return true;
+						}
+						return false;
+					});
+
+					for (LivingEntity candidate : nearby) {
+						if (!this.hasLineOfSight(candidate)) continue;
+						double dSq = this.distanceToSqr(candidate);
+						if (dSq < bestDistSq) {
+							bestDistSq = dSq;
+							bestTarget = candidate;
+						}
+					}
+
+					if (bestTarget != null) {
+						this.shootCooldown = 14;
+						double tx = bestTarget.getX();
+						double ty = bestTarget.getY() + bestTarget.getBbHeight() * 0.5;
+						double tz = bestTarget.getZ();
+						double sx = this.getX();
+						double sy = this.getY() + this.getEyeHeight();
+						double sz = this.getZ();
+
+						double dx = tx - sx;
+						double dy = ty - sy;
+						double dz = tz - sz;
+						double len = Math.hypot(dx, Math.hypot(dy, dz));
+
+						// Gunshot crack sound
+						sl.playSound(null, sx, sy, sz,
+							net.minecraft.sounds.SoundEvents.GENERIC_EXPLODE,
+							net.minecraft.sounds.SoundSource.HOSTILE,
+							0.35F, 1.85F
+						);
+
+						// Bullet tracer particles
+						if (len > 0.1) {
+							int steps = Math.min((int) (len * 2), 16);
+							for (int s = 1; s <= steps; s++) {
+								double t = (double) s / (double) steps;
+								sl.sendParticles(
+									net.minecraft.core.particles.ParticleTypes.CRIT,
+									sx + dx * t,
+									sy + dy * t,
+									sz + dz * t,
+									1, 0.02, 0.02, 0.02, 0.0
+								);
+							}
+						}
+
+						bestTarget.hurtServer(sl, this.damageSources().mobAttack(this), 7.0F);
+					}
+				}
 			}
 		}
 	}

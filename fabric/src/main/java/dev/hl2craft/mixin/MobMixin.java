@@ -24,7 +24,7 @@ public abstract class MobMixin {
 			if (self instanceof Enemy) {
 				this.targetSelector.addGoal(1, new NearestAttackableTargetGoal<>(self, HL2ActorEntity.class, false));
 			} else if (self instanceof IronGolem) {
-				this.targetSelector.addGoal(2, new NearestAttackableTargetGoal<>(self, HL2ActorEntity.class, false));
+				this.targetSelector.addGoal(2, new NearestAttackableTargetGoal<>(self, HL2ActorEntity.class, false, (target, sl) -> target instanceof HL2ActorEntity actor && actor.isHostile()));
 			}
 		}
 	}
