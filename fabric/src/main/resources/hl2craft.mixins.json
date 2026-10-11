@@ -27,6 +27,7 @@
     "TorchBlockMixin",
     "WallTorchBlockMixin",
     "BaseFireBlockMixin",
+    "FireBlockMixin",
     "FlintAndSteelItemMixin",
     "BucketItemMixin"
   ],
