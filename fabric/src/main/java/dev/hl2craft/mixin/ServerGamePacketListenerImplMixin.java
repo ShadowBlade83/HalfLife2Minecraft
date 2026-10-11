@@ -22,9 +22,11 @@ public abstract class ServerGamePacketListenerImplMixin {
 			return;
 		}
 		if (HL2Link.active()) {
+			double prevY = this.player.getY();
 			double x = packet.getX(this.player.getX());
-			double y = packet.getY(this.player.getY());
+			double y = packet.getY(prevY);
 			double z = packet.getZ(this.player.getZ());
+			double dy = y - prevY;
 			float yaw = packet.getYRot(this.player.getYRot());
 			float pitch = packet.getXRot(this.player.getXRot());
 			this.player.setPos(x, y, z);
@@ -33,11 +35,13 @@ public abstract class ServerGamePacketListenerImplMixin {
 			this.player.zo = this.player.zOld = z;
 			this.player.setYRot(yaw);
 			this.player.setXRot(pitch);
-			this.player.setDeltaMovement(Vec3.ZERO);
+			this.player.setDeltaMovement(0.0, dy, 0.0);
 			boolean onGround = packet.isOnGround() && !this.player.isFallFlying() && !this.player.getAbilities().flying;
 			this.player.setOnGround(onGround);
 			if (onGround || this.player.isFallFlying() || this.player.getAbilities().flying) {
 				this.player.fallDistance = 0.0f;
+			} else if (dy < -0.001) {
+				this.player.fallDistance += (float) (-dy);
 			}
 			((net.minecraft.server.level.ServerLevel) this.player.level()).getChunkSource().move(this.player);
 			this.resetPosition();

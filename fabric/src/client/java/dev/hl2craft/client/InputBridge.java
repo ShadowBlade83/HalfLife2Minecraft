@@ -63,6 +63,32 @@ public final class InputBridge {
 					minecraft.gui.setScreen(new PauseScreen(true));
 				}
 			}
+			case 99 -> {
+				if (minecraft.player != null && minecraft.level != null) {
+					if (code == 1) {
+						minecraft.level.playLocalSound(
+							minecraft.player.getX(), minecraft.player.getY(), minecraft.player.getZ(),
+							net.minecraft.sounds.SoundEvents.PLAYER_ATTACK_CRIT,
+							net.minecraft.sounds.SoundSource.PLAYERS, 1.0F, 1.0F, false
+						);
+						double px = a / 100.0;
+						double py = b / 100.0;
+						double pz = c / 100.0;
+						for (int i = 0; i < 16; i++) {
+							double vx = (Math.random() - 0.5) * 0.6;
+							double vy = (Math.random() - 0.2) * 0.5;
+							double vz = (Math.random() - 0.5) * 0.6;
+							minecraft.level.addParticle(net.minecraft.core.particles.ParticleTypes.CRIT, px, py, pz, vx, vy, vz);
+						}
+					} else {
+						minecraft.level.playLocalSound(
+							minecraft.player.getX(), minecraft.player.getY(), minecraft.player.getZ(),
+							net.minecraft.sounds.SoundEvents.PLAYER_ATTACK_KNOCKBACK,
+							net.minecraft.sounds.SoundSource.PLAYERS, 0.85F, 1.0F, false
+						);
+					}
+				}
+			}
 			default -> {}
 		}
 	}

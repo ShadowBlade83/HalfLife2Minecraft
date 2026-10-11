@@ -148,6 +148,10 @@ public final class Proto {
 	public static final int WEAPON_PICKAXE = 3;
 	public static final int WEAPON_ARROW = 4;
 
+	public static final int HIT_CRIT = 1;
+	public static final int HIT_PROJECTILE = 2;
+	public static final int HIT_ON_FIRE = 4;
+
 	// World entities @0x1C000
 	public static final int MAX_WORLD_ENTITIES = 160;
 	public static final long WE_SEQ = 0x00;

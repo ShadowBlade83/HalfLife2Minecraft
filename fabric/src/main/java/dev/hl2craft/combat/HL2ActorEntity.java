@@ -170,13 +170,52 @@ public class HL2ActorEntity extends LivingEntity {
 		if (this.isInvulnerableTo(level, source) || dmg <= 0.0F) {
 			return;
 		}
+		if (source.getEntity() instanceof net.minecraft.server.level.ServerPlayer player && !(source.getDirectEntity() instanceof Projectile)) {
+			boolean isFallingCrit = !player.onGround() && !player.onClimbable() && !player.isInWater()
+				&& !player.getAbilities().flying && !player.isFallFlying()
+				&& (player.fallDistance > 0.0F || player.getDeltaMovement().y < -0.01);
+			if (isFallingCrit) {
+				this.pendingFlags |= Proto.HIT_CRIT;
+				if (player.isSprinting()) {
+					dmg *= 1.5F;
+				}
+				player.crit(this);
+				level.sendParticles(
+					net.minecraft.core.particles.ParticleTypes.CRIT,
+					this.getX(), this.getY() + this.getBbHeight() * 0.65, this.getZ(),
+					16, 0.25, 0.35, 0.25, 0.18
+				);
+				level.playSound(
+					null, player.getX(), player.getY(), player.getZ(),
+					net.minecraft.sounds.SoundEvents.PLAYER_ATTACK_CRIT,
+					net.minecraft.sounds.SoundSource.PLAYERS, 1.0F, 1.0F
+				);
+			}
+		}
 		this.pendingDamage += dmg;
 		if (source.getDirectEntity() instanceof Projectile) {
-			this.pendingFlags |= 2;
+			this.pendingFlags |= Proto.HIT_PROJECTILE;
 		}
 		this.pendingWeapon = weaponClass(source);
 		if (source.is(net.minecraft.tags.DamageTypeTags.IS_FIRE)) {
-			this.pendingFlags |= 8;
+			this.pendingFlags |= Proto.HIT_ON_FIRE;
+		}
+		if (this.pushStrength <= 0.01F && source.getEntity() instanceof LivingEntity attacker) {
+			double dx = this.getX() - attacker.getX();
+			double dz = this.getZ() - attacker.getZ();
+			double len = Math.hypot(dx, dz);
+			if (len > 1e-4) {
+				this.pushX = dx / len;
+				this.pushZ = dz / len;
+			} else {
+				var look = attacker.getLookAngle();
+				double lLen = Math.hypot(look.x, look.z);
+				if (lLen > 1e-4) {
+					this.pushX = look.x / lLen;
+					this.pushZ = look.z / lLen;
+				}
+			}
+			this.pushStrength = attacker.isSprinting() ? 0.85F : 0.5F;
 		}
 		this.hitThisTick = true;
 		this.setHealth(20.0F);

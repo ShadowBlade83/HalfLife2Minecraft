@@ -382,6 +382,7 @@ namespace hl2craft
 			m_hasLastSentMcPos = false;
 			m_mcPhysicsActive = false;
 			m_placedBlocks.clear();
+			m_knockbacks.clear();
 			D3D9WorldRender::Get().ClearSections();
 			ExecCmd("ent_fire mc_blk_* Kill; ent_remove_all mc_strip; ent_create player_weaponstrip targetname mc_strip; ent_fire mc_strip StripWeaponsAndSuit; ent_fire item_suit Kill;");
 			if (m_shmView) {
@@ -420,6 +421,7 @@ namespace hl2craft
 		UpdateHostState(pos, angles);
 		ProcessInput();
 		ProcessEvents();
+		UpdateNpcKnockbacks();
 
 		DWORD now = GetTickCount();
 		if (now - m_lastStripTime > 400) {
@@ -728,6 +730,10 @@ namespace hl2craft
 		}
 
 		proto::McState *ms = (proto::McState*)(m_shmView + proto::kOffMcState);
+		if ((ms->flags & proto::kMcOnGround) == 0 && (ms->flags & proto::kMcFlying) == 0 && ms->y < m_lastMcY - 0.002) {
+			m_lastFallingUntilMs = nowMs + 160;
+		}
+		m_lastMcY = ms->y;
 		constexpr double kYOffset = 64.0;
 		bool isDucking = !m_mcPhysicsActive && ((GetAsyncKeyState(VK_SHIFT) & 0x8000) != 0);
 		float eyeHeightUnits = isDucking ? 28.0f : 64.0f;
@@ -1625,8 +1631,14 @@ namespace hl2craft
 			proto::McEvent *ev = (proto::McEvent*)(m_shmView + off);
 			if (ev->type == proto::kEvHitActor) {
 				int targetEnt = ev->entIndex;
+				bool isCrit = ((ev->flags & 1) != 0) || (GetTickCount() < m_lastFallingUntilMs);
 				int dmg = (int)std::max(ev->a * 3.5f, 25.0f);
+				if (isCrit && (ev->flags & 1) == 0) {
+					dmg = (int)std::round(dmg * 1.5f);
+				}
+
 				Vector entPos{0, 0, 0};
+				Vector origEntPos{0, 0, 0};
 				bool foundPos = false;
 				void *pPlayerEnt = GetLocalPlayerEntity();
 				if (targetEnt > 1 && m_entityList) {
@@ -1643,6 +1655,7 @@ namespace hl2craft
 								const float *org = ((GetOriginFn)rendVt[1])(renderable);
 								if (org && !IsBadReadPtr(org, sizeof(float) * 3)) {
 									entPos = Vector{ org[0], org[1], org[2] };
+									origEntPos = entPos;
 									foundPos = true;
 								}
 							}
@@ -1652,6 +1665,21 @@ namespace hl2craft
 
 				Vector playerPos{0, 0, 0};
 				bool hasPlayerPos = GetPlayerPos(playerPos);
+				Vector kbDir{ ev->b, -ev->c, 0.0f };
+				float kbLen = std::sqrt(kbDir.x * kbDir.x + kbDir.y * kbDir.y);
+				if (kbLen > 1e-4f) {
+					kbDir.x /= kbLen;
+					kbDir.y /= kbLen;
+				} else if (foundPos && hasPlayerPos) {
+					float dx = origEntPos.x - playerPos.x;
+					float dy = origEntPos.y - playerPos.y;
+					float dLen = std::sqrt(dx * dx + dy * dy);
+					if (dLen > 1e-3f) {
+						kbDir.x = dx / dLen;
+						kbDir.y = dy / dLen;
+					}
+				}
+
 				if (foundPos && hasPlayerPos) {
 					float dx = entPos.x - playerPos.x;
 					float dy = entPos.y - playerPos.y;
@@ -1665,24 +1693,49 @@ namespace hl2craft
 					}
 				}
 
-				m_ignoreSelfDamageUntil = GetTickCount() + 250;
+				DWORD nowHitMs = GetTickCount();
+				int applyDmg = dmg;
+				if (targetEnt > 1 && targetEnt == m_lastHitEntIndex && (nowHitMs - m_lastHitTimeMs) < 160) {
+					applyDmg = std::max(0, dmg - m_lastHitAppliedDmg);
+					m_lastHitAppliedDmg += applyDmg;
+				} else if (targetEnt > 1) {
+					m_lastHitEntIndex = targetEnt;
+					m_lastHitTimeMs = nowHitMs;
+					m_lastHitAppliedDmg = applyDmg;
+				}
+
+				if (targetEnt > 1 && foundPos) {
+					float kbStrength = (ev->d > 0.05f) ? ev->d : 0.55f;
+					StartNpcKnockback(targetEnt, origEntPos, kbDir, kbStrength, isCrit);
+					if (isCrit && (ev->flags & 1) == 0) {
+						int32_t mcX100 = (int32_t)std::round(origEntPos.x * proto::kMetersPerUnit * 100.0);
+						int32_t mcY100 = (int32_t)std::round(((origEntPos.z + 40.0f) * proto::kMetersPerUnit + 64.0) * 100.0);
+						int32_t mcZ100 = (int32_t)std::round(-origEntPos.y * proto::kMetersPerUnit * 100.0);
+						PushInput(99, 1, mcX100, mcY100, mcZ100);
+					}
+				}
+
+				m_ignoreSelfDamageUntil = nowHitMs + 250;
 				if (foundPos) {
-					static uint32_t s_hurtCounter = 0;
-					uint32_t hurtId = ++s_hurtCounter;
-					int safeHp = (m_lastSyncedHp > 0) ? m_lastSyncedHp : 100;
-					char cmd[384];
-					snprintf(cmd, sizeof(cmd),
-						"ent_create point_hurt targetname mc_hrt_%u; "
-						"ent_fire mc_hrt_%u addoutput \"origin %.2f %.2f %.2f\"; "
-						"ent_fire mc_hrt_%u addoutput \"Damage %d\"; "
-						"ent_fire mc_hrt_%u addoutput \"DamageRadius 28\"; "
-						"ent_fire mc_hrt_%u addoutput \"DamageType 2\"; "
-						"ent_fire mc_hrt_%u Hurt; "
-						"ent_fire mc_hrt_%u Kill; "
-						"ent_fire !player sethealth %d",
-						hurtId, hurtId, entPos.x, entPos.y, entPos.z + 32.0f,
-						hurtId, dmg, hurtId, hurtId, hurtId, hurtId, safeHp);
-					ExecCmd(cmd);
+					if (applyDmg > 0) {
+						static uint32_t s_hurtCounter = 0;
+						uint32_t hurtId = ++s_hurtCounter;
+						int safeHp = (m_lastSyncedHp > 0) ? m_lastSyncedHp : 100;
+						int dmgType = isCrit ? 64 : 128; // DMG_BLAST (64) or DMG_CLUB (128)
+						char cmd[384];
+						snprintf(cmd, sizeof(cmd),
+							"ent_create point_hurt targetname mc_hrt_%u; "
+							"ent_fire mc_hrt_%u addoutput \"origin %.2f %.2f %.2f\"; "
+							"ent_fire mc_hrt_%u addoutput \"Damage %d\"; "
+							"ent_fire mc_hrt_%u addoutput \"DamageRadius 28\"; "
+							"ent_fire mc_hrt_%u addoutput \"DamageType %d\"; "
+							"ent_fire mc_hrt_%u Hurt; "
+							"ent_fire mc_hrt_%u Kill; "
+							"ent_fire !player sethealth %d",
+							hurtId, hurtId, entPos.x, entPos.y, entPos.z + 32.0f,
+							hurtId, applyDmg, hurtId, hurtId, dmgType, hurtId, hurtId, safeHp);
+						ExecCmd(cmd);
+					}
 				} else {
 					HitCurrentTarget(dmg);
 				}
@@ -1913,14 +1966,17 @@ namespace hl2craft
 		if (tr.fraction < 1.0f && tr.m_pEnt && tr.m_pEnt != filter.pPlayer) {
 			void *networkable = (char*)tr.m_pEnt + 8;
 			const char *className = "";
+			int hitEntIndex = -1;
 			if (!IsBadReadPtr(networkable, sizeof(void*))) {
 				void **netVt = *(void***)networkable;
-				if (!IsBadReadPtr(netVt, sizeof(void*) * 3)) {
+				if (!IsBadReadPtr(netVt, sizeof(void*) * 10)) {
 					typedef void* (__thiscall *GetClientClassFn)(void*);
 					void *clientClass = ((GetClientClassFn)netVt[2])(networkable);
 					if (clientClass && !IsBadReadPtr(clientClass, sizeof(void*) * 3)) {
 						className = *(const char**)((char*)clientClass + 8);
 					}
+					typedef int (__thiscall *EntIndexFn)(void*);
+					hitEntIndex = ((EntIndexFn)netVt[9])(networkable);
 				}
 			}
 
@@ -1939,23 +1995,67 @@ namespace hl2craft
 					hitPos.y += (dy / dist) * 18.0f;
 				}
 
-				m_ignoreSelfDamageUntil = GetTickCount() + 250;
+				DWORD nowHitMs = GetTickCount();
+				bool isCrit = isNpc && (nowHitMs < m_lastFallingUntilMs);
+				int clubDmg = isProp ? std::max(dmg, 45) : (isCrit ? (int)std::round(dmg * 1.5f) : dmg);
+
+				if (isNpc && hitEntIndex > 1) {
+					if (hitEntIndex == m_lastHitEntIndex && (nowHitMs - m_lastHitTimeMs) < 160) {
+						return;
+					}
+					m_lastHitEntIndex = hitEntIndex;
+					m_lastHitTimeMs = nowHitMs;
+					m_lastHitAppliedDmg = clubDmg;
+
+					Vector entOrg = tr.endpos;
+					void *renderable = (char*)tr.m_pEnt + 4;
+					if (!IsBadReadPtr(renderable, sizeof(void*))) {
+						void **rendVt = *(void***)renderable;
+						if (!IsBadReadPtr(rendVt, sizeof(void*) * 2)) {
+							typedef const float* (__thiscall *GetOriginFn)(void*);
+							const float *org = ((GetOriginFn)rendVt[1])(renderable);
+							if (org && !IsBadReadPtr(org, sizeof(float) * 3)) {
+								entOrg = Vector{ org[0], org[1], org[2] };
+							}
+						}
+					}
+
+					Vector kbDir{ fwd.x, fwd.y, 0.0f };
+					float kbLen = std::sqrt(kbDir.x * kbDir.x + kbDir.y * kbDir.y);
+					if (kbLen > 1e-4f) {
+						kbDir.x /= kbLen;
+						kbDir.y /= kbLen;
+					} else if (dist > 1e-3f) {
+						kbDir.x = dx / dist;
+						kbDir.y = dy / dist;
+					}
+					bool sprinting = (GetAsyncKeyState(VK_CONTROL) & 0x8000) != 0;
+					float kbStrength = sprinting ? 0.85f : 0.55f;
+					StartNpcKnockback(hitEntIndex, entOrg, kbDir, kbStrength, isCrit);
+
+					int32_t mcX100 = (int32_t)std::round(tr.endpos.x * proto::kMetersPerUnit * 100.0);
+					int32_t mcY100 = (int32_t)std::round((tr.endpos.z * proto::kMetersPerUnit + 64.0) * 100.0);
+					int32_t mcZ100 = (int32_t)std::round(-tr.endpos.y * proto::kMetersPerUnit * 100.0);
+					PushInput(99, isCrit ? 1 : 0, mcX100, mcY100, mcZ100);
+				}
+
+				m_ignoreSelfDamageUntil = nowHitMs + 250;
 				static uint32_t s_meleeCounter = 0;
 				uint32_t hurtId = ++s_meleeCounter;
 				int safeHp = (m_lastSyncedHp > 0) ? m_lastSyncedHp : 100;
-				int clubDmg = isProp ? std::max(dmg, 45) : dmg;
+				int dmgType = isCrit ? 64 : 128;
 				char cmd[384];
 				snprintf(cmd, sizeof(cmd),
 					"ent_create point_hurt targetname mc_ml_%u; "
 					"ent_fire mc_ml_%u addoutput \"origin %.2f %.2f %.2f\"; "
 					"ent_fire mc_ml_%u addoutput \"Damage %d\"; "
 					"ent_fire mc_ml_%u addoutput \"DamageRadius 22\"; "
-					"ent_fire mc_ml_%u addoutput \"DamageType 128\"; "
+					"ent_fire mc_ml_%u addoutput \"DamageType %d\"; "
 					"ent_fire mc_ml_%u Hurt; "
 					"ent_fire mc_ml_%u Kill; "
 					"ent_fire !player sethealth %d",
 					hurtId, hurtId, hitPos.x, hitPos.y, hitPos.z,
-					hurtId, clubDmg, hurtId, hurtId, hurtId, hurtId, safeHp);
+					hurtId, clubDmg, hurtId, hurtId, dmgType, hurtId, hurtId, safeHp);
 				ExecCmd(cmd);
 			}
 		}
@@ -2078,6 +2178,213 @@ namespace hl2craft
 		ExecCmd(unstickCmd);
 	}
 
+	void HL2Bridge::StartNpcKnockback(int entIndex, const Vector &entPos, const Vector &dir, float strength, bool isCrit)
+	{
+		if (entIndex <= 1) return;
+		float len = std::sqrt(dir.x * dir.x + dir.y * dir.y);
+		if (len < 1e-4f) return;
+		Vector nDir{ dir.x / len, dir.y / len, 0.0f };
+
+		float clampedStr = std::clamp(strength, 0.35f, 1.6f);
+		float speed = clampedStr * 330.0f * (isCrit ? 1.35f : 1.0f);
+		DWORD now = GetTickCount();
+		DWORD duration = isCrit ? 220 : 185;
+
+		bool updated = false;
+		for (auto &kb : m_knockbacks) {
+			if (kb.entIndex == entIndex) {
+				kb.dir = nDir;
+				kb.stepSpeed = speed;
+				kb.startMs = now;
+				kb.lastStepMs = now;
+				kb.endMs = now + duration;
+				updated = true;
+				break;
+			}
+		}
+		if (!updated) {
+			if (m_knockbacks.size() >= 24) {
+				m_knockbacks.erase(m_knockbacks.begin());
+			}
+			m_knockbacks.push_back(ActiveKnockback{ entIndex, nDir, speed, now, now, now + duration });
+		}
+
+		// Spawn short-lived point_push for ragdoll/physics impulse + optional crit spark
+		static uint32_t s_kbPushCounter = 0;
+		uint32_t pushId = ++s_kbPushCounter;
+		float pushX = entPos.x - nDir.x * 18.0f;
+		float pushY = entPos.y - nDir.y * 18.0f;
+		float pushZ = entPos.z + 28.0f;
+		float yaw = std::atan2(nDir.y, nDir.x) * 180.0f / 3.14159265f;
+		int mag = (int)std::round(speed * 1.4f);
+
+		char cmd[512];
+		if (isCrit) {
+			snprintf(cmd, sizeof(cmd),
+				"ent_create point_push targetname mc_kbp_%u; "
+				"ent_fire mc_kbp_%u addoutput \"origin %.2f %.2f %.2f\"; "
+				"ent_fire mc_kbp_%u addoutput \"angles -15 %.2f 0\"; "
+				"ent_fire mc_kbp_%u addoutput \"magnitude %d\"; "
+				"ent_fire mc_kbp_%u addoutput \"radius 68\"; "
+				"ent_fire mc_kbp_%u addoutput \"spawnflags 12\"; "
+				"ent_fire mc_kbp_%u Enable; "
+				"ent_fire mc_kbp_%u Kill \"\" 0.14; "
+				"ent_create env_spark targetname mc_crt_%u; "
+				"ent_fire mc_crt_%u addoutput \"origin %.2f %.2f %.2f\"; "
+				"ent_fire mc_crt_%u addoutput \"Magnitude 2\"; "
+				"ent_fire mc_crt_%u addoutput \"TrailLength 2\"; "
+				"ent_fire mc_crt_%u SparkOnce; "
+				"ent_fire mc_crt_%u Kill \"\" 0.1",
+				pushId, pushId, pushX, pushY, pushZ,
+				pushId, yaw, pushId, mag, pushId, pushId, pushId, pushId,
+				pushId, pushId, entPos.x, entPos.y, entPos.z + 40.0f,
+				pushId, pushId, pushId, pushId);
+		} else {
+			snprintf(cmd, sizeof(cmd),
+				"ent_create point_push targetname mc_kbp_%u; "
+				"ent_fire mc_kbp_%u addoutput \"origin %.2f %.2f %.2f\"; "
+				"ent_fire mc_kbp_%u addoutput \"angles -12 %.2f 0\"; "
+				"ent_fire mc_kbp_%u addoutput \"magnitude %d\"; "
+				"ent_fire mc_kbp_%u addoutput \"radius 68\"; "
+				"ent_fire mc_kbp_%u addoutput \"spawnflags 12\"; "
+				"ent_fire mc_kbp_%u Enable; "
+				"ent_fire mc_kbp_%u Kill \"\" 0.14",
+				pushId, pushId, pushX, pushY, pushZ,
+				pushId, yaw, pushId, mag, pushId, pushId, pushId, pushId);
+		}
+		ExecCmd(cmd);
+	}
+
+	void HL2Bridge::UpdateNpcKnockbacks()
+	{
+		if (m_knockbacks.empty() || !m_entityList || !IsInPlayableWorld()) {
+			if (!IsInPlayableWorld()) m_knockbacks.clear();
+			return;
+		}
+
+		static void *s_serverTools = nullptr;
+		if (!s_serverTools) {
+			HMODULE hServer = GetModuleHandleA("server.dll");
+			if (hServer) {
+				CreateInterfaceFn serverFactory = (CreateInterfaceFn)GetProcAddress(hServer, "CreateInterface");
+				if (serverFactory) {
+					s_serverTools = serverFactory("VSERVERTOOLS001", nullptr);
+				}
+			}
+		}
+		if (!s_serverTools || IsBadReadPtr(s_serverTools, sizeof(void*))) return;
+		void **stVt = *(void***)s_serverTools;
+		if (!stVt || IsBadReadPtr(stVt, sizeof(void*) * 14)) return;
+
+		typedef void* (__thiscall *GetIServerEntityFn)(void*, void*);
+		typedef bool (__thiscall *SetKeyValueVecFn)(void*, void*, const char*, const Vector&);
+		GetIServerEntityFn getServerEnt = (GetIServerEntityFn)stVt[1];
+		SetKeyValueVecFn setKeyVec = (SetKeyValueVecFn)stVt[11];
+
+		void **evt = *(void***)m_entityList;
+		typedef void* (__thiscall *GetClientEntityFn)(void*, int);
+		GetClientEntityFn getClientEnt = (GetClientEntityFn)evt[3];
+		void *pPlayerEnt = GetLocalPlayerEntity();
+
+		DWORD now = GetTickCount();
+		for (auto it = m_knockbacks.begin(); it != m_knockbacks.end(); ) {
+			if (now >= it->endMs) {
+				it = m_knockbacks.erase(it);
+				continue;
+			}
+			float dt = (now - it->lastStepMs) * 0.001f;
+			if (dt < 0.008f) {
+				++it;
+				continue;
+			}
+			if (dt > 0.05f) dt = 0.05f;
+			it->lastStepMs = now;
+
+			void *pClientEnt = getClientEnt(m_entityList, it->entIndex);
+			if (!pClientEnt || pClientEnt == pPlayerEnt || IsBadReadPtr(pClientEnt, sizeof(void*))) {
+				it = m_knockbacks.erase(it);
+				continue;
+			}
+
+			void *renderable = (char*)pClientEnt + 4;
+			if (IsBadReadPtr(renderable, sizeof(void*))) {
+				it = m_knockbacks.erase(it);
+				continue;
+			}
+			void **rendVt = *(void***)renderable;
+			if (IsBadReadPtr(rendVt, sizeof(void*) * 2)) {
+				it = m_knockbacks.erase(it);
+				continue;
+			}
+			typedef const float* (__thiscall *GetOriginFn)(void*);
+			const float *org = ((GetOriginFn)rendVt[1])(renderable);
+			if (!org || IsBadReadPtr(org, sizeof(float) * 3)) {
+				it = m_knockbacks.erase(it);
+				continue;
+			}
+			Vector curPos{ org[0], org[1], org[2] };
+
+			void *pServerEnt = getServerEnt(s_serverTools, pClientEnt);
+			if (!pServerEnt || IsBadReadPtr(pServerEnt, sizeof(void*))) {
+				it = m_knockbacks.erase(it);
+				continue;
+			}
+
+			float totalDur = (float)std::max<DWORD>(1, it->endMs - it->startMs);
+			float t = std::clamp((float)(now - it->startMs) / totalDur, 0.0f, 1.0f);
+			float horizSpeed = it->stepSpeed * (1.15f - 0.65f * t);
+			float zVel = (t < 0.45f) ? (140.0f * (1.0f - t / 0.45f)) : 0.0f;
+
+			Vector nextPos{
+				curPos.x + it->dir.x * horizSpeed * dt,
+				curPos.y + it->dir.y * horizSpeed * dt,
+				curPos.z + zVel * dt
+			};
+
+			// Check wall collision with hull trace so knocked-back NPCs never clip into walls
+			if (m_engineTrace) {
+				void **trVt = *(void***)m_engineTrace;
+				if (trVt && trVt[4]) {
+					typedef void (__thiscall *TraceRayFn)(void*, const Ray_t&, unsigned int, ITraceFilter*, trace_t*);
+					TraceRayFn traceRay = (TraceRayFn)trVt[4];
+					CTraceFilterWorldOnly worldFilter;
+					Ray_t ray;
+					Vector mins{ -16.0f, -16.0f, 12.0f };
+					Vector maxs{ 16.0f, 16.0f, 64.0f };
+					ray.InitHull(curPos, nextPos, mins, maxs);
+					trace_t tr;
+					std::memset(&tr, 0, sizeof(tr));
+					traceRay(m_engineTrace, ray, 0x200400B, &worldFilter, &tr);
+					if (tr.startsolid) {
+						nextPos.x = curPos.x;
+						nextPos.y = curPos.y;
+					} else if (tr.fraction < 1.0f) {
+						nextPos.x = curPos.x + (nextPos.x - curPos.x) * tr.fraction * 0.85f;
+						nextPos.y = curPos.y + (nextPos.y - curPos.y) * tr.fraction * 0.85f;
+						nextPos.z = curPos.z + (nextPos.z - curPos.z) * tr.fraction;
+					}
+				}
+			}
+
+			// Also avoid pushing NPC inside player-placed Minecraft blocks
+			int nbx = (int)std::floor(nextPos.x * proto::kMetersPerUnit);
+			int nby = (int)std::floor(nextPos.z * proto::kMetersPerUnit + 64.0);
+			int nbz = (int)std::floor(-nextPos.y * proto::kMetersPerUnit);
+			if (m_placedBlocks.find({nbx, nby, nbz}) != m_placedBlocks.end() ||
+			    m_placedBlocks.find({nbx, nby + 1, nbz}) != m_placedBlocks.end()) {
+				nextPos.x = curPos.x;
+				nextPos.y = curPos.y;
+			}
+
+			Vector velVec{ it->dir.x * horizSpeed, it->dir.y * horizSpeed, zVel };
+			setKeyVec(s_serverTools, pServerEnt, "origin", nextPos);
+			setKeyVec(s_serverTools, pServerEnt, "basevelocity", velVec);
+			setKeyVec(s_serverTools, pServerEnt, "velocity", velVec);
+
+			++it;
+		}
+	}
+
 	void HL2Bridge::ProcessInput()
 	{
 		HWND fgWnd = GetForegroundWindow();
@@ -2143,7 +2450,7 @@ namespace hl2craft
 		handleKey('0', 39);
 	}
 
-	void HL2Bridge::PushInput(uint16_t type, uint16_t code, int32_t a, int32_t b)
+	void HL2Bridge::PushInput(uint16_t type, uint16_t code, int32_t a, int32_t b, int32_t c)
 	{
 		if (!m_shmView) return;
 		uint64_t head = *(uint64_t*)(m_shmView + proto::kOffInputRing + proto::kInputRingHeadOff);
@@ -2153,7 +2460,7 @@ namespace hl2craft
 		ev->code = code;
 		ev->a = a;
 		ev->b = b;
-		ev->c = 0;
+		ev->c = c;
 		MemoryBarrier();
 		*(uint64_t*)(m_shmView + proto::kOffInputRing + proto::kInputRingHeadOff) = head + 1;
 	}

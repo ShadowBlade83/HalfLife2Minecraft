@@ -138,7 +138,7 @@ namespace hl2craft
 		HANDLE GetSharedMemoryHandle() const { return m_shmHandle; }
 		uint8_t* GetSharedMemoryView() const { return m_shmView; }
 
-		void PushInput(uint16_t type, uint16_t code, int32_t a, int32_t b = 0);
+		void PushInput(uint16_t type, uint16_t code, int32_t a, int32_t b = 0, int32_t c = 0);
 		void PushTextInput(int32_t codepoint);
 		static LRESULT CALLBACK SubclassWndProc(HWND hwnd, UINT uMsg, WPARAM wParam, LPARAM lParam);
 		void HookWindow();
@@ -161,6 +161,23 @@ namespace hl2craft
 		void ProcessInput();
 		void ComputeUnstickPos(const Vector &playerPos, int ibx, int iby, int ibz, Vector &outPos);
 		void StartUnstickLift(const Vector &targetPos, int ibx, int iby, int ibz);
+		void StartNpcKnockback(int entIndex, const Vector &entPos, const Vector &dir, float strength, bool isCrit);
+		void UpdateNpcKnockbacks();
+
+		struct ActiveKnockback {
+			int entIndex;
+			Vector dir;
+			float stepSpeed;
+			DWORD startMs;
+			DWORD lastStepMs;
+			DWORD endMs;
+		};
+		std::vector<ActiveKnockback> m_knockbacks;
+		int m_lastHitEntIndex = -1;
+		DWORD m_lastHitTimeMs = 0;
+		int m_lastHitAppliedDmg = 0;
+		double m_lastMcY = 64.0;
+		DWORD m_lastFallingUntilMs = 0;
 
 		bool m_initialized = false;
 		void *m_engineClient = nullptr;
