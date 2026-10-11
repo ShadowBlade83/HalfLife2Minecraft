@@ -515,6 +515,7 @@ namespace hl2craft
 				}
 			}
 			if (IsNpcClass(className) || IsVehicleClass(className)) return false;
+			if (className && (strstr(className, "Ragdoll") != nullptr || strstr(className, "Weapon") != nullptr || strstr(className, "Item") != nullptr)) return false;
 			if (pPlacedBlocks && !pPlacedBlocks->empty() && IsPropClass(className)) {
 				void *renderable = (char*)pEntity + 4;
 				if (!IsBadReadPtr(renderable, sizeof(void*))) {
@@ -836,32 +837,30 @@ namespace hl2craft
 			float sy = -(float)ms->z * (float)proto::kUnitsPerBlock;
 			float sz = ((float)ms->y + eyeOffsetBlocks - 64.0f) * (float)proto::kUnitsPerBlock;
 
-			// Real-time Source Engine 3D hull wall collision & push-out (prevents flying/walking through any HL2 wall at any altitude)
+			// Real-time Source Engine 3D inner-core hull wall collision & push-out (prevents flying through HL2 walls at high speed/altitude without blocking narrow doorways)
 			if (m_engineTrace && m_hasLastSentMcPos) {
 				void **tvt = *(void***)m_engineTrace;
 				if (tvt && tvt[4]) {
 					typedef void (__thiscall *TraceRayFn)(void*, const Ray_t&, unsigned int, ITraceFilter*, trace_t*);
 					TraceRayFn traceRay = (TraceRayFn)tvt[4];
-					CTraceFilterEnvironment envFilter;
-					envFilter.pPlayer = GetLocalPlayerEntity();
-					envFilter.pPlacedBlocks = &m_placedBlocks;
+					CTraceFilterWorldOnly worldFilter;
 
-					constexpr unsigned int kPlayerSolidMask = 0x201400B; // MASK_PLAYERSOLID (includes playerclip & moveable brushes)
-					Vector hullMins{ -11.5f, -11.5f, 20.0f };
-					Vector hullMaxs{  11.5f,  11.5f, 56.0f };
+					constexpr unsigned int kWorldSolidMask = 0x201000B; // World brushes + playerclip + grates + windows (ignores moveable doors/props)
+					Vector hullMins{ -5.0f, -5.0f, 24.0f };
+					Vector hullMaxs{  5.0f,  5.0f, 46.0f };
 					Vector targetPos{ sx, sy, sz };
 
 					Ray_t hullRay;
 					hullRay.InitHull(m_lastSentMcPos, targetPos, hullMins, hullMaxs);
 					trace_t trHull;
 					std::memset(&trHull, 0, sizeof(trHull));
-					traceRay(m_engineTrace, hullRay, kPlayerSolidMask, &envFilter, &trHull);
+					traceRay(m_engineTrace, hullRay, kWorldSolidMask, &worldFilter, &trHull);
 
 					bool pushedOut = false;
 					if (trHull.startsolid) {
-						// Player hull is overlapping an HL2 wall -> push radially outward to nearest free space
+						// Inner core is inside an HL2 world wall -> push radially outward to nearest free space
 						for (int rStep = 1; rStep <= 8 && !pushedOut; ++rStep) {
-							float r = rStep * 6.0f;
+							float r = rStep * 5.0f;
 							for (int d = 0; d < 8; ++d) {
 								float ang = d * (3.14159265f * 0.25f);
 								Vector cand{ sx + std::cos(ang) * r, sy + std::sin(ang) * r, sz };
@@ -869,7 +868,7 @@ namespace hl2craft
 								testRay.InitHull(cand, cand, hullMins, hullMaxs);
 								trace_t trTest;
 								std::memset(&trTest, 0, sizeof(trTest));
-								traceRay(m_engineTrace, testRay, kPlayerSolidMask, &envFilter, &trTest);
+								traceRay(m_engineTrace, testRay, kWorldSolidMask, &worldFilter, &trTest);
 								if (!trTest.startsolid) {
 									sx = cand.x;
 									sy = cand.y;
@@ -879,14 +878,14 @@ namespace hl2craft
 							}
 						}
 					} else if (trHull.fraction < 1.0f && std::abs(trHull.plane.normal.z) < 0.65f) {
-						// Hit a vertical/angled HL2 wall -> slide along wall plane and push out slightly from wall normal
+						// High-speed impact with a vertical/angled HL2 wall -> slide along wall plane and push out along normal
 						Vector n = trHull.plane.normal;
 						Vector stopPos{
-							trHull.endpos.x + n.x * 0.5f,
-							trHull.endpos.y + n.y * 0.5f,
-							trHull.endpos.z + n.z * 0.5f
+							trHull.endpos.x + n.x * 4.0f,
+							trHull.endpos.y + n.y * 4.0f,
+							trHull.endpos.z + n.z * 1.0f
 						};
-						Vector rem{ targetPos.x - stopPos.x, targetPos.y - stopPos.y, targetPos.z - stopPos.z };
+						Vector rem{ targetPos.x - trHull.endpos.x, targetPos.y - trHull.endpos.y, targetPos.z - trHull.endpos.z };
 						float dot = rem.x * n.x + rem.y * n.y + rem.z * n.z;
 						if (dot < 0.0f) {
 							rem.x -= dot * n.x;
@@ -898,20 +897,17 @@ namespace hl2craft
 						slideRay.InitHull(stopPos, slideTarget, hullMins, hullMaxs);
 						trace_t trSlide;
 						std::memset(&trSlide, 0, sizeof(trSlide));
-						traceRay(m_engineTrace, slideRay, kPlayerSolidMask, &envFilter, &trSlide);
+						traceRay(m_engineTrace, slideRay, kWorldSolidMask, &worldFilter, &trSlide);
 						if (!trSlide.startsolid) {
-							sx = trSlide.endpos.x + n.x * 0.25f;
-							sy = trSlide.endpos.y + n.y * 0.25f;
+							sx = trSlide.endpos.x + n.x * 2.0f;
+							sy = trSlide.endpos.y + n.y * 2.0f;
 							sz = trSlide.endpos.z;
 						} else {
 							sx = stopPos.x;
 							sy = stopPos.y;
 							sz = stopPos.z;
 						}
-						float corrSq = (sx - targetPos.x) * (sx - targetPos.x) + (sy - targetPos.y) * (sy - targetPos.y);
-						if (corrSq > 16.0f) {
-							pushedOut = true;
-						}
+						pushedOut = true;
 					}
 
 					if (pushedOut) {
@@ -1187,7 +1183,7 @@ namespace hl2craft
 			}
 		}
 
-		// Pass 1: Floor & slope detection (only step ray origin up when lower point is continuously solid)
+		// Pass 1: Floor & slope detection (only step ray origin up when lower point is a walkable step with open headroom, never inside a wall/doorframe)
 		for (int ix = 0; ix < gridSize; ix++) {
 			int bx = minX + ix;
 			for (int iz = 0; iz < gridSize; iz++) {
@@ -1198,12 +1194,16 @@ namespace hl2craft
 				float hzStart = baseFloorZ + 18.0f;
 				float hzEnd = baseFloorZ - 420.0f;
 
-				// Only raise hzStart if the lower point is inside solid geometry (stairs/slopes/crates), NEVER across open air into a ceiling/lintel
+				// Only raise hzStart if lower point is solid AND headroom above (+64 and +82) is open air (stairs/slopes/crates, never a wall/doorframe)
 				if (getPointContents && (getPointContents(m_engineTrace, Vector{hx, hy, hzStart}, nullptr) & kSolidContentsMask) != 0) {
-					if ((getPointContents(m_engineTrace, Vector{hx, hy, baseFloorZ + 34.0f}, nullptr) & kSolidContentsMask) == 0) {
-						hzStart = baseFloorZ + 34.0f;
-					} else if ((getPointContents(m_engineTrace, Vector{hx, hy, baseFloorZ + 48.0f}, nullptr) & kSolidContentsMask) == 0) {
-						hzStart = baseFloorZ + 48.0f;
+					bool headroomOpen = ((getPointContents(m_engineTrace, Vector{hx, hy, baseFloorZ + 64.0f}, nullptr) & kSolidContentsMask) == 0) &&
+					                    ((getPointContents(m_engineTrace, Vector{hx, hy, baseFloorZ + 82.0f}, nullptr) & kSolidContentsMask) == 0);
+					if (headroomOpen) {
+						if ((getPointContents(m_engineTrace, Vector{hx, hy, baseFloorZ + 34.0f}, nullptr) & kSolidContentsMask) == 0) {
+							hzStart = baseFloorZ + 34.0f;
+						} else if ((getPointContents(m_engineTrace, Vector{hx, hy, baseFloorZ + 48.0f}, nullptr) & kSolidContentsMask) == 0) {
+							hzStart = baseFloorZ + 48.0f;
+						}
 					}
 				}
 
@@ -1212,6 +1212,25 @@ namespace hl2craft
 				trace_t tr;
 				std::memset(&tr, 0, sizeof(tr));
 				traceRay(m_engineTrace, ray, kStaticWorldMask, &filter, &tr);
+
+				// If block center is inside a doorframe/wall pillar, sample the 4 quadrant centers so narrow passages keep their floor
+				if (tr.startsolid || tr.fraction >= 1.0f) {
+					for (int qx = 0; qx < 2 && (tr.startsolid || tr.fraction >= 1.0f); ++qx) {
+						for (int qz = 0; qz < 2; ++qz) {
+							float qhx = (bx + 0.25f + qx * 0.5f) * kBlockUnits;
+							float qhy = -(bz + 0.25f + qz * 0.5f) * kBlockUnits;
+							Ray_t qRay;
+							qRay.Init(Vector{qhx, qhy, baseFloorZ + 18.0f}, Vector{qhx, qhy, hzEnd});
+							trace_t qTr;
+							std::memset(&qTr, 0, sizeof(qTr));
+							traceRay(m_engineTrace, qRay, kStaticWorldMask, &filter, &qTr);
+							if (!qTr.startsolid && qTr.fraction < 1.0f) {
+								tr = qTr;
+								break;
+							}
+						}
+					}
+				}
 
 				if (tr.fraction < 1.0f && !tr.startsolid) {
 					float floorZ = tr.endpos.z;
@@ -1296,10 +1315,63 @@ namespace hl2craft
 			{ 0x000000000F0F0F0FULL, 0x0F0F0F0F00000000ULL },
 			{ 0x00000000F0F0F0F0ULL, 0xF0F0F0F000000000ULL }
 		};
-		Vector qMins{ -9.5f, -9.5f, -8.0f };
-		Vector qMaxs{  9.5f,  9.5f,  8.0f };
 
-		// Pass 2: 3D Box Quadrant walls, fences, closed doors, crouch-vents, ceilings, and flight-altitude walls
+		// Hierarchical 8x8 sub-voxel wall scanner (4.72-unit / 0.125-block resolution near player so narrow passages & doorways are never narrowed)
+		auto trace8x8WallMask = [&](int bx, int bz, float testZ, float halfZ) -> uint64_t {
+			float bcx = (bx + 0.5f) * kBlockUnits;
+			float bcy = -(bz + 0.5f) * kBlockUnits;
+			Ray_t bRay;
+			bRay.InitHull(Vector{bcx, bcy, testZ}, Vector{bcx, bcy, testZ},
+			              Vector{-18.85f, -18.85f, -halfZ}, Vector{18.85f, 18.85f, halfZ});
+			trace_t bTr;
+			std::memset(&bTr, 0, sizeof(bTr));
+			traceRay(m_engineTrace, bRay, kStaticWorldMask, &filter, &bTr);
+			if (!bTr.startsolid) {
+				return 0ULL;
+			}
+
+			bool fineSubVoxels = (std::abs(bx - centerBx) <= 6 && std::abs(bz - centerBz) <= 6);
+			uint64_t mask = 0ULL;
+			Vector qMins{ -9.4f, -9.4f, -halfZ };
+			Vector qMaxs{  9.4f,  9.4f,  halfZ };
+			Vector subMins{ -1.8f, -1.8f, -halfZ };
+			Vector subMaxs{  1.8f,  1.8f,  halfZ };
+
+			for (int qx = 0; qx < 2; ++qx) {
+				for (int qz = 0; qz < 2; ++qz) {
+					float qcx = (bx + 0.25f + qx * 0.5f) * kBlockUnits;
+					float qcy = -(bz + 0.25f + qz * 0.5f) * kBlockUnits;
+					Ray_t qRay;
+					qRay.InitHull(Vector{qcx, qcy, testZ}, Vector{qcx, qcy, testZ}, qMins, qMaxs);
+					trace_t qTr;
+					std::memset(&qTr, 0, sizeof(qTr));
+					traceRay(m_engineTrace, qRay, kStaticWorldMask, &filter, &qTr);
+					if (!qTr.startsolid) continue;
+
+					if (!fineSubVoxels) {
+						mask |= kQuadMasks[qx][qz];
+					} else {
+						for (int sx = qx * 4; sx < qx * 4 + 4; ++sx) {
+							float scx = (bx + (sx + 0.5f) * 0.125f) * kBlockUnits;
+							for (int sz = qz * 4; sz < qz * 4 + 4; ++sz) {
+								float scy = -(bz + (sz + 0.5f) * 0.125f) * kBlockUnits;
+								Ray_t sRay;
+								sRay.InitHull(Vector{scx, scy, testZ}, Vector{scx, scy, testZ}, subMins, subMaxs);
+								trace_t sTr;
+								std::memset(&sTr, 0, sizeof(sTr));
+								traceRay(m_engineTrace, sRay, kStaticWorldMask, &filter, &sTr);
+								if (sTr.startsolid) {
+									mask |= (1ULL << (sx | (sz << 3)));
+								}
+							}
+						}
+					}
+				}
+			}
+			return mask;
+		};
+
+		// Pass 2: 8x8 Sub-Voxel walls, fences, closed doors, crouch-vents, ceilings, and flight-altitude walls
 		for (int ix = 0; ix < gridSize; ix++) {
 			int bx = minX + ix;
 			for (int iz = 0; iz < gridSize; iz++) {
@@ -1309,22 +1381,7 @@ namespace hl2craft
 				float cy = -(bz + 0.5f) * kBlockUnits;
 
 				if (by == -9999) {
-					uint64_t solidMask = 0ULL;
-					float testZ = playerPos.z + 36.0f;
-					for (int qx = 0; qx < 2; ++qx) {
-						for (int qz = 0; qz < 2; ++qz) {
-							float qcx = (bx + 0.25f + qx * 0.5f) * kBlockUnits;
-							float qcy = -(bz + 0.25f + qz * 0.5f) * kBlockUnits;
-							Ray_t qRay;
-							qRay.InitHull(Vector{qcx, qcy, testZ}, Vector{qcx, qcy, testZ}, qMins, qMaxs);
-							trace_t qTr;
-							std::memset(&qTr, 0, sizeof(qTr));
-							traceRay(m_engineTrace, qRay, kStaticWorldMask, &filter, &qTr);
-							if (qTr.startsolid) {
-								solidMask |= kQuadMasks[qx][qz];
-							}
-						}
-					}
+					uint64_t solidMask = trace8x8WallMask(bx, bz, playerPos.z + 32.0f, 6.0f);
 					if (solidMask != 0ULL) {
 						for (int wy = std::min(centerBy, playerBy); wy <= std::max(centerBy, playerBy) + 2; wy++) {
 							proto::ColBlock wb;
@@ -1339,31 +1396,25 @@ namespace hl2craft
 				float floorZ = floorZGrid[ix][iz];
 				float floorNz = floorNzGrid[ix][iz];
 				int sub = floorSubGrid[ix][iz];
-				// On flat floors test at floorZ + 40 (+/- 8 = 32..48 units, above 18-unit stairs); on slopes test higher (+54) so the slope itself isn't hit
-				float zWallTest = (floorNz > 0.96f) ? (floorZ + 40.0f) : (floorZ + 54.0f);
+				// Test lower wall at knee/waist height (28 units on flat floors, 38 on slopes so low stairwell ceilings & vents aren't hit)
+				float zLowerWall = (floorNz > 0.96f) ? (floorZ + 28.0f) : (floorZ + 38.0f);
+				uint64_t lowerWallMask = trace8x8WallMask(bx, bz, zLowerWall, 4.0f);
 
-				uint64_t wallMask = 0ULL;
-				for (int qx = 0; qx < 2; ++qx) {
-					for (int qz = 0; qz < 2; ++qz) {
-						float qcx = (bx + 0.25f + qx * 0.5f) * kBlockUnits;
-						float qcy = -(bz + 0.25f + qz * 0.5f) * kBlockUnits;
-						Ray_t qRay;
-						qRay.InitHull(Vector{qcx, qcy, zWallTest}, Vector{qcx, qcy, zWallTest}, qMins, qMaxs);
-						trace_t qTr;
-						std::memset(&qTr, 0, sizeof(qTr));
-						traceRay(m_engineTrace, qRay, kStaticWorldMask, &filter, &qTr);
-						if (qTr.startsolid) {
-							wallMask |= kQuadMasks[qx][qz];
-						}
-					}
-				}
-
-				if (wallMask != 0ULL) {
-					for (int wy = by + 1; wy <= std::min(by + 3, maxY); ++wy) {
+				if (lowerWallMask != 0ULL) {
+					for (int wy = by + 1; wy <= std::min(by + 2, maxY); ++wy) {
 						proto::ColBlock wb;
 						wb.x = bx; wb.y = wy; wb.z = bz; wb.pad = 0;
-						for (int l = 0; l < 8; l++) wb.bits[l] = wallMask;
+						for (int l = 0; l < 8; l++) wb.bits[l] = lowerWallMask;
 						blocks.push_back(wb);
+					}
+					if (by + 3 <= maxY) {
+						uint64_t upperMask = trace8x8WallMask(bx, bz, floorZ + 68.0f, 6.0f);
+						if (upperMask != 0ULL) {
+							proto::ColBlock wb3;
+							wb3.x = bx; wb3.y = by + 3; wb3.z = bz; wb3.pad = 0;
+							for (int l = 0; l < 8; l++) wb3.bits[l] = upperMask;
+							blocks.push_back(wb3);
+						}
 					}
 				} else {
 					// Check for crouch-vents / low overhangs (clear at knee height, solid at floorZ + 52)
@@ -1387,21 +1438,7 @@ namespace hl2craft
 				for (int wy = highStart; wy <= highEnd; ++wy) {
 					float cz = (wy + 0.5f - (float)kYOffset) * kBlockUnits;
 					if (wy >= playerBy - 1 && wy <= playerBy + 2 && playerBy > by + 2) {
-						uint64_t highMask = 0ULL;
-						for (int qx = 0; qx < 2; ++qx) {
-							for (int qz = 0; qz < 2; ++qz) {
-								float qcx = (bx + 0.25f + qx * 0.5f) * kBlockUnits;
-								float qcy = -(bz + 0.25f + qz * 0.5f) * kBlockUnits;
-								Ray_t qRay;
-								qRay.InitHull(Vector{qcx, qcy, cz}, Vector{qcx, qcy, cz}, qMins, qMaxs);
-								trace_t qTr;
-								std::memset(&qTr, 0, sizeof(qTr));
-								traceRay(m_engineTrace, qRay, kStaticWorldMask, &filter, &qTr);
-								if (qTr.startsolid) {
-									highMask |= kQuadMasks[qx][qz];
-								}
-							}
-						}
+						uint64_t highMask = trace8x8WallMask(bx, bz, cz, 6.0f);
 						if (highMask != 0ULL) {
 							proto::ColBlock cb;
 							cb.x = bx; cb.y = wy; cb.z = bz; cb.pad = 0;

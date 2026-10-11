@@ -29,7 +29,7 @@ abstract class LocalPlayerMixin {
 		double hostFeetY = snap.y() - self.getEyeHeight();
 		dev.hl2craft.world.HL2Collision.ensurePlayerFloorAndStep(snap.x(), hostFeetY, snap.z(), hostFeetY);
 
-		if (teleportChanged || snap.hl2PhysicsOverride()) {
+		if (snap.hl2PhysicsOverride()) {
 			self.setPos(snap.x(), hostFeetY, snap.z());
 			self.xo = self.xOld = snap.x();
 			self.yo = self.yOld = hostFeetY;
@@ -45,6 +45,14 @@ abstract class LocalPlayerMixin {
 			self.setDeltaMovement(Vec3.ZERO);
 			self.setOnGround(snap.onGround());
 			return;
+		}
+
+		if (teleportChanged) {
+			self.setPos(snap.x(), hostFeetY, snap.z());
+			self.xo = self.xOld = snap.x();
+			self.yo = self.yOld = hostFeetY;
+			self.zo = self.zOld = snap.z();
+			self.setDeltaMovement(self.getDeltaMovement().scale(0.5));
 		}
 
 		dev.hl2craft.world.HL2Collision.ensurePlayerFloorAndStep(self.getX(), self.getY(), self.getZ(), hostFeetY);
