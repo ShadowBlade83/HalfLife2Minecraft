@@ -3,7 +3,7 @@ package dev.hl2craft.mixin;
 import dev.hl2craft.link.HL2Link;
 import dev.hl2craft.link.Proto;
 import net.minecraft.core.BlockPos;
-import net.minecraft.world.entity.player.Player;
+import net.minecraft.world.entity.LivingEntity;
 import net.minecraft.world.item.BucketItem;
 import net.minecraft.world.level.Level;
 import net.minecraft.world.level.material.Fluid;
@@ -23,7 +23,7 @@ public abstract class BucketItemMixin {
 	private Fluid content;
 
 	@Inject(method = "emptyContents", at = @At("RETURN"))
-	private void hl2craft$trackLavaPlaced(Player player, Level level, BlockPos pos, BlockHitResult hitResult, CallbackInfoReturnable<Boolean> cir) {
+	private void hl2craft$trackLavaPlaced(LivingEntity entity, Level level, BlockPos pos, BlockHitResult hitResult, CallbackInfoReturnable<Boolean> cir) {
 		if (HL2Link.active() && cir.getReturnValue() && this.content == Fluids.LAVA) {
 			HL2Link.pushEvent(Proto.EV_BLOCK_PLACED, 0, pos.getX(), pos.getY(), pos.getZ(), 15.0f, 1, 0);
 		}
