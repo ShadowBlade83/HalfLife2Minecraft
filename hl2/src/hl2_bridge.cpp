@@ -2188,7 +2188,8 @@ namespace hl2craft
 		float clampedStr = std::clamp(strength, 0.35f, 1.6f);
 		float speed = clampedStr * 330.0f * (isCrit ? 1.35f : 1.0f);
 		DWORD now = GetTickCount();
-		DWORD duration = isCrit ? 220 : 185;
+		DWORD moveDuration = isCrit ? 220 : 185;
+		DWORD flashDuration = 360;
 
 		bool updated = false;
 		for (auto &kb : m_knockbacks) {
@@ -2197,7 +2198,9 @@ namespace hl2craft
 				kb.stepSpeed = speed;
 				kb.startMs = now;
 				kb.lastStepMs = now;
-				kb.endMs = now + duration;
+				kb.moveEndMs = now + moveDuration;
+				kb.flashEndMs = now + flashDuration;
+				kb.isCrit = isCrit;
 				updated = true;
 				break;
 			}
@@ -2206,7 +2209,43 @@ namespace hl2craft
 			if (m_knockbacks.size() >= 24) {
 				m_knockbacks.erase(m_knockbacks.begin());
 			}
-			m_knockbacks.push_back(ActiveKnockback{ entIndex, nDir, speed, now, now, now + duration });
+			m_knockbacks.push_back(ActiveKnockback{ entIndex, nDir, speed, now, now, now + moveDuration, now + flashDuration, isCrit });
+		}
+
+		// Immediately tint the NPC red on both client (C_BaseEntity::m_clrRender @ +0x58) and server (VSERVERTOOLS001::SetKeyValue)
+		if (m_entityList) {
+			void **evt = *(void***)m_entityList;
+			typedef void* (__thiscall *GetClientEntityFn)(void*, int);
+			GetClientEntityFn getClientEnt = (GetClientEntityFn)evt[3];
+			void *pClientEnt = getClientEnt(m_entityList, entIndex);
+			if (pClientEnt && pClientEnt != GetLocalPlayerEntity() && !IsBadReadPtr((char*)pClientEnt + 0x5C, 4)) {
+				uint8_t gb = isCrit ? 40 : 62;
+				uint8_t *clr = (uint8_t*)pClientEnt + 0x58;
+				clr[0] = 255;
+				clr[1] = gb;
+				clr[2] = gb;
+				clr[3] = 255;
+
+				static void *s_stInit = nullptr;
+				if (!s_stInit) {
+					HMODULE hServer = GetModuleHandleA("server.dll");
+					if (hServer) {
+						CreateInterfaceFn serverFactory = (CreateInterfaceFn)GetProcAddress(hServer, "CreateInterface");
+						if (serverFactory) s_stInit = serverFactory("VSERVERTOOLS001", nullptr);
+					}
+				}
+				if (s_stInit && !IsBadReadPtr(s_stInit, sizeof(void*))) {
+					void **stVt = *(void***)s_stInit;
+					if (stVt && !IsBadReadPtr(stVt, sizeof(void*) * 14)) {
+						typedef void* (__thiscall *GetIServerEntityFn)(void*, void*);
+						typedef bool (__thiscall *SetKeyValueStrFn)(void*, void*, const char*, const char*);
+						void *pServerEnt = ((GetIServerEntityFn)stVt[1])(s_stInit, pClientEnt);
+						if (pServerEnt && !IsBadReadPtr(pServerEnt, sizeof(void*))) {
+							((SetKeyValueStrFn)stVt[13])(s_stInit, pServerEnt, "rendercolor", isCrit ? "255 40 40" : "255 62 62");
+						}
+					}
+				}
+			}
 		}
 
 		// Spawn short-lived point_push for ragdoll/physics impulse + optional crit spark
@@ -2218,7 +2257,7 @@ namespace hl2craft
 		float yaw = std::atan2(nDir.y, nDir.x) * 180.0f / 3.14159265f;
 		int mag = (int)std::round(speed * 1.4f);
 
-		char cmd[512];
+		char cmd[576];
 		if (isCrit) {
 			snprintf(cmd, sizeof(cmd),
 				"ent_create point_push targetname mc_kbp_%u; "
@@ -2234,7 +2273,8 @@ namespace hl2craft
 				"ent_fire mc_crt_%u addoutput \"Magnitude 2\"; "
 				"ent_fire mc_crt_%u addoutput \"TrailLength 2\"; "
 				"ent_fire mc_crt_%u SparkOnce; "
-				"ent_fire mc_crt_%u Kill \"\" 0.1",
+				"ent_fire mc_crt_%u Kill \"\" 0.1; "
+				"ent_fire prop_ragdoll* addoutput \"rendercolor 255 255 255\" 0.36",
 				pushId, pushId, pushX, pushY, pushZ,
 				pushId, yaw, pushId, mag, pushId, pushId, pushId, pushId,
 				pushId, pushId, entPos.x, entPos.y, entPos.z + 40.0f,
@@ -2248,7 +2288,8 @@ namespace hl2craft
 				"ent_fire mc_kbp_%u addoutput \"radius 68\"; "
 				"ent_fire mc_kbp_%u addoutput \"spawnflags 12\"; "
 				"ent_fire mc_kbp_%u Enable; "
-				"ent_fire mc_kbp_%u Kill \"\" 0.14",
+				"ent_fire mc_kbp_%u Kill \"\" 0.14; "
+				"ent_fire prop_ragdoll* addoutput \"rendercolor 255 255 255\" 0.36",
 				pushId, pushId, pushX, pushY, pushZ,
 				pushId, yaw, pushId, mag, pushId, pushId, pushId, pushId);
 		}
@@ -2278,20 +2319,85 @@ namespace hl2craft
 
 		typedef void* (__thiscall *GetIServerEntityFn)(void*, void*);
 		typedef bool (__thiscall *SetKeyValueVecFn)(void*, void*, const char*, const Vector&);
+		typedef bool (__thiscall *SetKeyValueStrFn)(void*, void*, const char*, const char*);
 		GetIServerEntityFn getServerEnt = (GetIServerEntityFn)stVt[1];
 		SetKeyValueVecFn setKeyVec = (SetKeyValueVecFn)stVt[11];
+		SetKeyValueStrFn setKeyStr = (SetKeyValueStrFn)stVt[13];
 
 		void **evt = *(void***)m_entityList;
 		typedef void* (__thiscall *GetClientEntityFn)(void*, int);
+		typedef int (__thiscall *GetHighestEntityIndexFn)(void*);
 		GetClientEntityFn getClientEnt = (GetClientEntityFn)evt[3];
+		GetHighestEntityIndexFn getMaxIdx = (GetHighestEntityIndexFn)evt[6];
 		void *pPlayerEnt = GetLocalPlayerEntity();
 
 		DWORD now = GetTickCount();
 		for (auto it = m_knockbacks.begin(); it != m_knockbacks.end(); ) {
-			if (now >= it->endMs) {
+			void *pClientEnt = getClientEnt(m_entityList, it->entIndex);
+			bool validClientEnt = (pClientEnt && pClientEnt != pPlayerEnt && !IsBadReadPtr((char*)pClientEnt + 0x5C, 4));
+			void *pServerEnt = validClientEnt ? getServerEnt(s_serverTools, pClientEnt) : nullptr;
+			if (pServerEnt && IsBadReadPtr(pServerEnt, sizeof(void*))) {
+				pServerEnt = nullptr;
+			}
+
+			if (now >= it->flashEndMs) {
+				if (validClientEnt) {
+					uint8_t *clr = (uint8_t*)pClientEnt + 0x58;
+					clr[0] = 255;
+					clr[1] = 255;
+					clr[2] = 255;
+					clr[3] = 255;
+				}
+				if (pServerEnt) {
+					setKeyStr(s_serverTools, pServerEnt, "rendercolor", "255 255 255");
+				}
+				// Also restore any ragdoll that inherited our hurt-flash color
+				int maxEnt = std::min(getMaxIdx(m_entityList), 2048);
+				for (int i = 1; i <= maxEnt; ++i) {
+					void *ce = getClientEnt(m_entityList, i);
+					if (!ce || ce == pPlayerEnt || IsBadReadPtr((char*)ce + 0x5C, 4)) continue;
+					uint8_t *c = (uint8_t*)ce + 0x58;
+					if (c[0] == 255 && c[1] == c[2] && (c[1] == 62 || c[1] == 40 || c[1] == 150)) {
+						c[1] = 255;
+						c[2] = 255;
+						void *se = getServerEnt(s_serverTools, ce);
+						if (se && !IsBadReadPtr(se, sizeof(void*))) {
+							setKeyStr(s_serverTools, se, "rendercolor", "255 255 255");
+						}
+					}
+				}
 				it = m_knockbacks.erase(it);
 				continue;
 			}
+
+			// Update red hurt tint every frame while flash is active
+			DWORD elapsedFlash = now - it->startMs;
+			uint8_t baseGb = it->isCrit ? 40 : 62;
+			uint8_t curGb = baseGb;
+			if (elapsedFlash > 250) {
+				float fadeT = std::clamp((float)(elapsedFlash - 250) / 110.0f, 0.0f, 1.0f);
+				curGb = (uint8_t)std::round(baseGb + (255.0f - baseGb) * fadeT);
+			}
+			if (validClientEnt) {
+				uint8_t *clr = (uint8_t*)pClientEnt + 0x58;
+				clr[0] = 255;
+				clr[1] = curGb;
+				clr[2] = curGb;
+				clr[3] = 255;
+			}
+			if (pServerEnt) {
+				if (elapsedFlash <= 250) {
+					setKeyStr(s_serverTools, pServerEnt, "rendercolor", it->isCrit ? "255 40 40" : "255 62 62");
+				} else {
+					setKeyStr(s_serverTools, pServerEnt, "rendercolor", "255 150 150");
+				}
+			}
+
+			if (!validClientEnt || !pServerEnt || now >= it->moveEndMs) {
+				++it;
+				continue;
+			}
+
 			float dt = (now - it->lastStepMs) * 0.001f;
 			if (dt < 0.008f) {
 				++it;
@@ -2300,37 +2406,25 @@ namespace hl2craft
 			if (dt > 0.05f) dt = 0.05f;
 			it->lastStepMs = now;
 
-			void *pClientEnt = getClientEnt(m_entityList, it->entIndex);
-			if (!pClientEnt || pClientEnt == pPlayerEnt || IsBadReadPtr(pClientEnt, sizeof(void*))) {
-				it = m_knockbacks.erase(it);
-				continue;
-			}
-
 			void *renderable = (char*)pClientEnt + 4;
 			if (IsBadReadPtr(renderable, sizeof(void*))) {
-				it = m_knockbacks.erase(it);
+				++it;
 				continue;
 			}
 			void **rendVt = *(void***)renderable;
 			if (IsBadReadPtr(rendVt, sizeof(void*) * 2)) {
-				it = m_knockbacks.erase(it);
+				++it;
 				continue;
 			}
 			typedef const float* (__thiscall *GetOriginFn)(void*);
 			const float *org = ((GetOriginFn)rendVt[1])(renderable);
 			if (!org || IsBadReadPtr(org, sizeof(float) * 3)) {
-				it = m_knockbacks.erase(it);
+				++it;
 				continue;
 			}
 			Vector curPos{ org[0], org[1], org[2] };
 
-			void *pServerEnt = getServerEnt(s_serverTools, pClientEnt);
-			if (!pServerEnt || IsBadReadPtr(pServerEnt, sizeof(void*))) {
-				it = m_knockbacks.erase(it);
-				continue;
-			}
-
-			float totalDur = (float)std::max<DWORD>(1, it->endMs - it->startMs);
+			float totalDur = (float)std::max<DWORD>(1, it->moveEndMs - it->startMs);
 			float t = std::clamp((float)(now - it->startMs) / totalDur, 0.0f, 1.0f);
 			float horizSpeed = it->stepSpeed * (1.15f - 0.65f * t);
 			float zVel = (t < 0.45f) ? (140.0f * (1.0f - t / 0.45f)) : 0.0f;

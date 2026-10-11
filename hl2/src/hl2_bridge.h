@@ -170,7 +170,9 @@ namespace hl2craft
 			float stepSpeed;
 			DWORD startMs;
 			DWORD lastStepMs;
-			DWORD endMs;
+			DWORD moveEndMs;
+			DWORD flashEndMs;
+			bool isCrit;
 		};
 		std::vector<ActiveKnockback> m_knockbacks;
 		int m_lastHitEntIndex = -1;
