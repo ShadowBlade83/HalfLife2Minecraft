@@ -938,9 +938,9 @@ namespace hl2craft
 			}
 			if (s_effects && !IsBadReadPtr(s_effects, sizeof(void*))) {
 				void **evt = *(void***)s_effects;
-				if (evt && !IsBadReadPtr(evt, sizeof(void*) * 2)) {
+				if (evt && !IsBadReadPtr(evt, sizeof(void*) * 5)) {
 					typedef dlight_t* (__thiscall *AllocDlightFn)(void*, int key);
-					AllocDlightFn allocDlight = (AllocDlightFn)evt[0];
+					AllocDlightFn allocDlight = (AllocDlightFn)evt[4];
 
 					// 1. Held item dynamic light
 					if (ms->heldLight > 0) {
@@ -1630,18 +1630,6 @@ namespace hl2craft
 				float ldy = org[1] - ly;
 				float ldz = org[2] - lz;
 				if (ldx * ldx + ldy * ldy < 32.0f * 32.0f && std::abs(ldz) < 40.0f) {
-					HMODULE hServer = GetModuleHandleA("server.dll");
-					if (hServer) {
-						char *pEntList = (char*)hServer + 0x6A74C0;
-						if (!IsBadReadPtr(pEntList, 0x10000)) {
-							void *pServerEnt = *(void**)(pEntList + 4 + i * 16);
-							if (pServerEnt && !IsBadReadPtr(pServerEnt, sizeof(void*))) {
-								typedef int (__cdecl *CreateEntityFlameFn)(void*, char);
-								CreateEntityFlameFn createFlame = (CreateEntityFlameFn)((char*)hServer + 0x15B770);
-								createFlame(pServerEnt, 1);
-							}
-						}
-					}
 					static uint32_t s_lavaBurnCount = 0;
 					uint32_t lbId = ++s_lavaBurnCount;
 					char lavaBurnCmd[256];
