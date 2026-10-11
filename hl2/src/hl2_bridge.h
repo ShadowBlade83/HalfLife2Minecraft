@@ -173,6 +173,7 @@ namespace hl2craft
 			DWORD moveEndMs;
 			DWORD flashEndMs;
 			bool isCrit;
+			bool velocityCleared;
 		};
 		std::vector<ActiveKnockback> m_knockbacks;
 		int m_lastHitEntIndex = -1;
