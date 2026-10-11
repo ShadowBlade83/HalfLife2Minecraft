@@ -23,7 +23,12 @@
     "ServerPlayerGameModeMixin",
     "ServerPlayerMixin",
     "ThrownEnderpearlMixin",
-    "WalkNodeEvaluatorMixin"
+    "WalkNodeEvaluatorMixin",
+    "TorchBlockMixin",
+    "WallTorchBlockMixin",
+    "BaseFireBlockMixin",
+    "FlintAndSteelItemMixin",
+    "BucketItemMixin"
   ],
   "injectors": {
     "defaultRequire": 1

@@ -86,13 +86,25 @@ public abstract class BlockItemMixin {
 		if (HL2Link.active() && cir.getReturnValue().consumesAction()) {
 			BlockPos pos = context.getClickedPos();
 			BlockState placed = context.getLevel().getBlockState(pos);
-			if (!placed.getCollisionShape(context.getLevel(), pos).isEmpty()) {
-				dev.hl2craft.world.HL2Collision.trackPlacedBlock(pos);
-				HL2Link.pushEvent(Proto.EV_BLOCK_PLACED, 0, pos.getX(), pos.getY(), pos.getZ(), 0.0f, 0, 0);
+			int light = placed.getLightEmission();
+			int lightType = 0;
+			if (light > 0) {
+				lightType = (placed.is(net.minecraft.world.level.block.Blocks.SOUL_TORCH)
+					|| placed.is(net.minecraft.world.level.block.Blocks.SOUL_WALL_TORCH)
+					|| placed.is(net.minecraft.world.level.block.Blocks.SOUL_LANTERN)
+					|| placed.is(net.minecraft.world.level.block.Blocks.SOUL_CAMPFIRE)
+					|| placed.is(net.minecraft.world.level.block.Blocks.SOUL_FIRE)) ? 2 : 1;
+			}
+			boolean hasCollision = !placed.getCollisionShape(context.getLevel(), pos).isEmpty();
+			if (hasCollision || light > 0) {
+				if (hasCollision) {
+					dev.hl2craft.world.HL2Collision.trackPlacedBlock(pos);
+				}
+				HL2Link.pushEvent(Proto.EV_BLOCK_PLACED, 0, pos.getX(), pos.getY(), pos.getZ(), (float) light, lightType, hasCollision ? 1 : 0);
 
-				// If player's feet/legs overlap the newly placed block (e.g. pillaring upwards), immediately push player onto top of block
+				// If player's feet/legs overlap the newly placed solid block (e.g. pillaring upwards), push player onto top of block
 				Player player = context.getPlayer();
-				if (player != null) {
+				if (player != null && hasCollision) {
 					double halfW = 0.30;
 					double px = player.getX();
 					double py = player.getY();

@@ -107,6 +107,8 @@ namespace hl2craft::proto
 		float         cameraDistance; // Distance in MC blocks
 		float         supportHeight;  // MC Y of highest solid block under player feet
 		float         health;         // MC player health (0..20)
+		std::uint32_t heldLight;      // MC held item light level (0..15)
+		std::uint32_t heldLightType;  // 0: none, 1: warm, 2: soul
 	};
 	static_assert(sizeof(McState) <= 0x100);
 

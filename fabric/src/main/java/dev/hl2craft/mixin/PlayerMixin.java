@@ -53,7 +53,14 @@ public abstract class PlayerMixin {
 
 				if (teleportChanged || snap.hl2PhysicsOverride()) {
 					if (teleportChanged) {
+						net.minecraft.world.phys.Vec3 oldDm = sp.getDeltaMovement();
 						sp.teleportTo(serverLevel, snap.x(), feetY, snap.z(), java.util.Collections.emptySet(), snap.yaw(), snap.pitch(), true);
+						double dPosSq = sp.position().distanceToSqr(snap.x(), feetY, snap.z());
+						if (dPosSq < 0.6 * 0.6) {
+							sp.setDeltaMovement(oldDm.x * 0.5, oldDm.y, oldDm.z * 0.5);
+						} else {
+							sp.setDeltaMovement(net.minecraft.world.phys.Vec3.ZERO);
+						}
 					} else {
 						sp.setPos(snap.x(), feetY, snap.z());
 						sp.xo = sp.xOld = snap.x();
@@ -61,8 +68,8 @@ public abstract class PlayerMixin {
 						sp.zo = sp.zOld = snap.z();
 						sp.setYRot(snap.yaw());
 						sp.setXRot(snap.pitch());
+						sp.setDeltaMovement(net.minecraft.world.phys.Vec3.ZERO);
 					}
-					sp.setDeltaMovement(net.minecraft.world.phys.Vec3.ZERO);
 					sp.setOnGround(snap.onGround());
 					sp.fallDistance = 0.0f;
 				} else {

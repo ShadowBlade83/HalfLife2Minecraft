@@ -193,6 +193,28 @@ public final class HL2Client {
 		double sendY = net.minecraft.util.Mth.lerp(partialTick, player.yo, player.getY());
 		double sendZ = net.minecraft.util.Mth.lerp(partialTick, player.zo, player.getZ());
 
+		int heldLight = 0;
+		int heldLightType = 0;
+		for (net.minecraft.world.item.ItemStack stack : new net.minecraft.world.item.ItemStack[]{ player.getMainHandItem(), player.getOffhandItem() }) {
+			if (stack == null || stack.isEmpty()) continue;
+			if (stack.is(net.minecraft.world.item.Items.TORCH)) {
+				heldLight = Math.max(heldLight, 14);
+				if (heldLightType == 0) heldLightType = 1;
+			} else if (stack.is(net.minecraft.world.item.Items.LANTERN) || stack.is(net.minecraft.world.item.Items.CAMPFIRE)
+					|| stack.is(net.minecraft.world.item.Items.LAVA_BUCKET) || stack.is(net.minecraft.world.item.Items.GLOWSTONE)
+					|| stack.is(net.minecraft.world.item.Items.SEA_LANTERN) || stack.is(net.minecraft.world.item.Items.OCHRE_FROGLIGHT)
+					|| stack.is(net.minecraft.world.item.Items.PEARLESCENT_FROGLIGHT) || stack.is(net.minecraft.world.item.Items.VERDANT_FROGLIGHT)) {
+				heldLight = Math.max(heldLight, 15);
+				if (heldLightType == 0) heldLightType = 1;
+			} else if (stack.is(net.minecraft.world.item.Items.SOUL_TORCH)) {
+				heldLight = Math.max(heldLight, 10);
+				heldLightType = 2;
+			} else if (stack.is(net.minecraft.world.item.Items.SOUL_LANTERN) || stack.is(net.minecraft.world.item.Items.SOUL_CAMPFIRE)) {
+				heldLight = Math.max(heldLight, 10);
+				heldLightType = 2;
+			}
+		}
+
 		HL2Link.writeMcState(
 			flags,
 			sendX,
@@ -210,7 +232,9 @@ public final class HL2Client {
 			cameraMode,
 			cameraDistance,
 			supportHeight,
-			player.getHealth()
+			player.getHealth(),
+			heldLight,
+			heldLightType
 		);
 	}
 }

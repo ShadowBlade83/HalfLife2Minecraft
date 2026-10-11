@@ -98,6 +98,19 @@ public class HL2ActorEntity extends LivingEntity {
 	public void tick() {
 		this.baseTick();
 		this.setHealth(this.getMaxHealth());
+		if (!this.level().isClientSide()) {
+			net.minecraft.core.BlockPos pos = this.blockPosition();
+			net.minecraft.world.level.material.FluidState fluid = this.level().getFluidState(pos);
+			net.minecraft.world.level.material.FluidState fluidAbove = this.level().getFluidState(pos.above());
+			net.minecraft.world.level.block.state.BlockState bs = this.level().getBlockState(pos);
+			if (fluid.is(net.minecraft.tags.FluidTags.LAVA) || fluidAbove.is(net.minecraft.tags.FluidTags.LAVA)
+					|| bs.is(net.minecraft.world.level.block.Blocks.FIRE) || bs.is(net.minecraft.world.level.block.Blocks.SOUL_FIRE)) {
+				this.pendingDamage += 4.0F;
+				this.pendingFlags |= Proto.HIT_ON_FIRE;
+				this.hitThisTick = true;
+				this.setRemainingFireTicks(160);
+			}
+		}
 	}
 
 	@Override

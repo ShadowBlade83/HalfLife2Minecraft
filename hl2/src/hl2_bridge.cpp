@@ -1,4 +1,4 @@
-#include "hl2_bridge.h"
+﻿#include "hl2_bridge.h"
 #include "d3d9_render.h"
 #include <cstring>
 #include <setjmp.h>
@@ -382,6 +382,7 @@ namespace hl2craft
 			m_hasLastSentMcPos = false;
 			m_mcPhysicsActive = false;
 			m_placedBlocks.clear();
+			m_placedLights.clear();
 			m_knockbacks.clear();
 			D3D9WorldRender::Get().ClearSections();
 			ExecCmd("ent_fire mc_blk_* Kill; ent_remove_all mc_strip; ent_create player_weaponstrip targetname mc_strip; ent_fire mc_strip StripWeaponsAndSuit; ent_fire item_suit Kill;");
@@ -866,7 +867,7 @@ namespace hl2craft
 					if (trHull.startsolid) {
 						// Inner core is inside an HL2 world wall -> push radially outward to nearest free space
 						for (int rStep = 1; rStep <= 8 && !pushedOut; ++rStep) {
-							float r = rStep * 5.0f;
+							float r = rStep * 4.0f;
 							for (int d = 0; d < 8; ++d) {
 								float ang = d * (3.14159265f * 0.25f);
 								Vector cand{ sx + std::cos(ang) * r, sy + std::sin(ang) * r, sz };
@@ -883,52 +884,34 @@ namespace hl2craft
 								}
 							}
 						}
-					} else if (trHull.fraction < 1.0f && std::abs(trHull.plane.normal.z) < 0.65f) {
-						// High-speed impact with a vertical/angled HL2 wall -> slide along wall plane and push out along normal
-						Vector n = trHull.plane.normal;
-						Vector stopPos{
-							trHull.endpos.x + n.x * 4.0f,
-							trHull.endpos.y + n.y * 4.0f,
-							trHull.endpos.z + n.z * 1.0f
-						};
-						Vector rem{ targetPos.x - trHull.endpos.x, targetPos.y - trHull.endpos.y, targetPos.z - trHull.endpos.z };
-						float dot = rem.x * n.x + rem.y * n.y + rem.z * n.z;
-						if (dot < 0.0f) {
-							rem.x -= dot * n.x;
-							rem.y -= dot * n.y;
-							rem.z -= dot * n.z;
+					} else if (trHull.fraction < 0.85f && std::abs(trHull.plane.normal.z) < 0.65f) {
+						// Fast impact/flight into a vertical wall (e.g. elytra) -> slide along wall plane
+						float speedH = std::sqrt((sx - m_lastSentMcPos.x) * (sx - m_lastSentMcPos.x) + (sy - m_lastSentMcPos.y) * (sy - m_lastSentMcPos.y));
+						if (speedH > 14.0f) {
+							Vector n = trHull.plane.normal;
+							sx = trHull.endpos.x + n.x * 2.0f;
+							sy = trHull.endpos.y + n.y * 2.0f;
+							pushedOut = true;
 						}
-						Vector slideTarget{ stopPos.x + rem.x, stopPos.y + rem.y, stopPos.z + rem.z };
-						Ray_t slideRay;
-						slideRay.InitHull(stopPos, slideTarget, hullMins, hullMaxs);
-						trace_t trSlide;
-						std::memset(&trSlide, 0, sizeof(trSlide));
-						traceRay(m_engineTrace, slideRay, kWorldSolidMask, &worldFilter, &trSlide);
-						if (!trSlide.startsolid) {
-							sx = trSlide.endpos.x + n.x * 2.0f;
-							sy = trSlide.endpos.y + n.y * 2.0f;
-							sz = trSlide.endpos.z;
-						} else {
-							sx = stopPos.x;
-							sy = stopPos.y;
-							sz = stopPos.z;
-						}
-						pushedOut = true;
 					}
 
 					if (pushedOut) {
-						double corrMcX = sx * proto::kMetersPerUnit;
-						double corrMcZ = -sy * proto::kMetersPerUnit;
-						double corrMcFeetY = (sz * proto::kMetersPerUnit) + kYOffset - eyeOffsetBlocks;
-						hs->seq = seq + 3;
-						MemoryBarrier();
-						hs->posX = corrMcX;
-						hs->posY = corrMcFeetY + mcEyeH;
-						hs->posZ = corrMcZ;
-						m_teleportSeq++;
-						hs->teleportSeq = m_teleportSeq;
-						MemoryBarrier();
-						hs->seq = seq + 4;
+						float pdx = sx - targetPos.x;
+						float pdy = sy - targetPos.y;
+						if (pdx * pdx + pdy * pdy > 16.0f) {
+							double corrMcX = sx * proto::kMetersPerUnit;
+							double corrMcZ = -sy * proto::kMetersPerUnit;
+							double corrMcFeetY = (sz * proto::kMetersPerUnit) + kYOffset - eyeOffsetBlocks;
+							hs->seq = seq + 3;
+							MemoryBarrier();
+							hs->posX = corrMcX;
+							hs->posY = corrMcFeetY + mcEyeH;
+							hs->posZ = corrMcZ;
+							m_teleportSeq++;
+							hs->teleportSeq = m_teleportSeq;
+							MemoryBarrier();
+							hs->seq = seq + 4;
+						}
 					}
 				}
 			}
@@ -943,6 +926,71 @@ namespace hl2craft
 				"setpos %.2f %.2f %.2f",
 				sx, sy, sz);
 			ExecCmd(syncCmd);
+
+			// Real-time dynamic point lighting from held torches, lanterns, campfires, lava & placed lights
+			static void *s_effects = nullptr;
+			if (!s_effects) {
+				HMODULE hEngine = GetModuleHandleA("engine.dll");
+				if (hEngine) {
+					CreateInterfaceFn engineFactory = (CreateInterfaceFn)GetProcAddress(hEngine, "CreateInterface");
+					if (engineFactory) s_effects = engineFactory("VEngineEffects001", nullptr);
+				}
+			}
+			if (s_effects && !IsBadReadPtr(s_effects, sizeof(void*))) {
+				void **evt = *(void***)s_effects;
+				if (evt && !IsBadReadPtr(evt, sizeof(void*) * 2)) {
+					typedef dlight_t* (__thiscall *AllocDlightFn)(void*, int key);
+					AllocDlightFn allocDlight = (AllocDlightFn)evt[0];
+
+					// 1. Held item dynamic light
+					if (ms->heldLight > 0) {
+						dlight_t *dl = allocDlight(s_effects, 1001);
+						if (dl) {
+							dl->flags = 0;
+							dl->origin = Vector{ sx, sy, sz + 42.0f };
+							dl->radius = 280.0f * ((float)ms->heldLight / 15.0f);
+							if (ms->heldLightType == 2) {
+								dl->color.r = 60; dl->color.g = 200; dl->color.b = 255; dl->color.exponent = 3;
+							} else {
+								dl->color.r = 255; dl->color.g = 180; dl->color.b = 75; dl->color.exponent = 3;
+							}
+							dl->die = m_lastGameTime + 0.15f;
+							dl->decay = dl->radius / 0.15f;
+							dl->minlight = 4.0f;
+						}
+					}
+
+					// 2. Placed torches, lanterns, campfires, and lava
+					if (!m_placedLights.empty()) {
+						int lightKeyBase = 2000;
+						int activeCount = 0;
+						for (const auto &pl : m_placedLights) {
+							if (activeCount >= 16) break;
+							float lx = (pl.bx + 0.5f) * (float)proto::kUnitsPerBlock;
+							float ly = -(pl.bz + 0.5f) * (float)proto::kUnitsPerBlock;
+							float lz = (pl.by + 0.5f - 64.0f) * (float)proto::kUnitsPerBlock;
+							float dx = lx - sx, dy = ly - sy, dz = lz - sz;
+							if (dx * dx + dy * dy + dz * dz > 750.0f * 750.0f) continue;
+
+							int key = lightKeyBase + (++activeCount);
+							dlight_t *dl = allocDlight(s_effects, key);
+							if (dl) {
+								dl->flags = 0;
+								dl->origin = Vector{ lx, ly, lz };
+								dl->radius = 230.0f * ((float)pl.lightLevel / 15.0f);
+								if (pl.lightType == 2) {
+									dl->color.r = 60; dl->color.g = 200; dl->color.b = 255; dl->color.exponent = 3;
+								} else {
+									dl->color.r = 255; dl->color.g = 175; dl->color.b = 70; dl->color.exponent = 3;
+								}
+								dl->die = m_lastGameTime + 0.15f;
+								dl->decay = dl->radius / 0.15f;
+								dl->minlight = 4.0f;
+							}
+						}
+					}
+				}
+			}
 		}
 
 		// Synchronize damage taken in HL2 -> Minecraft
@@ -1572,6 +1620,45 @@ namespace hl2craft
 				}
 			}
 
+			// Ignite and burn any NPC standing in placed lava
+			for (const auto &pl : m_placedLights) {
+				if (!pl.isLava) continue;
+				float lx = (pl.bx + 0.5f) * (float)proto::kUnitsPerBlock;
+				float ly = -(pl.bz + 0.5f) * (float)proto::kUnitsPerBlock;
+				float lz = (pl.by + 0.5f - 64.0f) * (float)proto::kUnitsPerBlock;
+				float ldx = org[0] - lx;
+				float ldy = org[1] - ly;
+				float ldz = org[2] - lz;
+				if (ldx * ldx + ldy * ldy < 32.0f * 32.0f && std::abs(ldz) < 40.0f) {
+					HMODULE hServer = GetModuleHandleA("server.dll");
+					if (hServer) {
+						char *pEntList = (char*)hServer + 0x6A74C0;
+						if (!IsBadReadPtr(pEntList, 0x10000)) {
+							void *pServerEnt = *(void**)(pEntList + 4 + i * 16);
+							if (pServerEnt && !IsBadReadPtr(pServerEnt, sizeof(void*))) {
+								typedef int (__cdecl *CreateEntityFlameFn)(void*, char);
+								CreateEntityFlameFn createFlame = (CreateEntityFlameFn)((char*)hServer + 0x15B770);
+								createFlame(pServerEnt, 1);
+							}
+						}
+					}
+					static uint32_t s_lavaBurnCount = 0;
+					uint32_t lbId = ++s_lavaBurnCount;
+					char lavaBurnCmd[256];
+					snprintf(lavaBurnCmd, sizeof(lavaBurnCmd),
+						"ent_create point_hurt targetname mc_lv_%u; "
+						"ent_fire mc_lv_%u addoutput \"origin %.2f %.2f %.2f\"; "
+						"ent_fire mc_lv_%u addoutput \"Damage 12\"; "
+						"ent_fire mc_lv_%u addoutput \"DamageRadius 28\"; "
+						"ent_fire mc_lv_%u addoutput \"DamageType 8\"; "
+						"ent_fire mc_lv_%u Hurt; "
+						"ent_fire mc_lv_%u Kill",
+						lbId, lbId, org[0], org[1], org[2], lbId, lbId, lbId, lbId, lbId);
+					ExecCmd(lavaBurnCmd);
+					break;
+				}
+			}
+
 			proto::ActorRecord &rec = tbl->actors[count];
 			rec.entIndex = i;
 			rec.flags = proto::kActorHostile;
@@ -1721,7 +1808,24 @@ namespace hl2craft
 						static uint32_t s_hurtCounter = 0;
 						uint32_t hurtId = ++s_hurtCounter;
 						int safeHp = (m_lastSyncedHp > 0) ? m_lastSyncedHp : 100;
-						int dmgType = isCrit ? 64 : 128; // DMG_BLAST (64) or DMG_CLUB (128)
+						bool isOnFire = (ev->flags & 4) != 0;
+						int dmgType = isOnFire ? 8 : (isCrit ? 64 : 128); // 8: DMG_BURN, 64: DMG_BLAST, 128: DMG_CLUB
+
+						if (isOnFire) {
+							HMODULE hServer = GetModuleHandleA("server.dll");
+							if (hServer && targetEnt > 0 && targetEnt < 4096) {
+								char *pEntList = (char*)hServer + 0x6A74C0;
+								if (!IsBadReadPtr(pEntList, 0x10000)) {
+									void *pServerEnt = *(void**)(pEntList + 4 + targetEnt * 16);
+									if (pServerEnt && !IsBadReadPtr(pServerEnt, sizeof(void*))) {
+										typedef int (__cdecl *CreateEntityFlameFn)(void*, char);
+										CreateEntityFlameFn createFlame = (CreateEntityFlameFn)((char*)hServer + 0x15B770);
+										createFlame(pServerEnt, 1);
+									}
+								}
+							}
+						}
+
 						char cmd[384];
 						snprintf(cmd, sizeof(cmd),
 							"ent_create point_hurt targetname mc_hrt_%u; "
@@ -1807,9 +1911,11 @@ namespace hl2craft
 				}
 			} else if (ev->type == proto::kEvPlayerDied) {
 				m_placedBlocks.clear();
+				m_placedLights.clear();
 				ExecCmd("ent_fire mc_blk_* Kill; kill");
 			} else if (ev->type == proto::kEvClearBlocks) {
 				m_placedBlocks.clear();
+				m_placedLights.clear();
 				ExecCmd("ent_fire mc_blk_* Kill");
 			} else if (ev->type == proto::kEvBlockPlaced) {
 				float sx = (ev->a + 0.5f) * (float)proto::kUnitsPerBlock;
@@ -1818,44 +1924,21 @@ namespace hl2craft
 				int ibx = (int)std::round(ev->a);
 				int iby = (int)std::round(ev->b);
 				int ibz = (int)std::round(ev->c);
-				m_placedBlocks.insert({ibx, iby, ibz});
 
-				// Block AABB in Source coordinates
-				float bMinX = (float)ibx * (float)proto::kUnitsPerBlock;
-				float bMaxX = ((float)ibx + 1.0f) * (float)proto::kUnitsPerBlock;
-				float bMinY = -((float)ibz + 1.0f) * (float)proto::kUnitsPerBlock;
-				float bMaxY = -(float)ibz * (float)proto::kUnitsPerBlock;
-				float bMinZ = ((float)iby - 64.0f) * (float)proto::kUnitsPerBlock;
-				float bMaxZ = ((float)iby + 1.0f - 64.0f) * (float)proto::kUnitsPerBlock;
+				int lightLevel = (int)ev->d;
+				int lightType = ev->flags;
+				bool hasCollision = (ev->weapon != 0);
 
-				Vector playerPos{0, 0, 0};
-				bool hasPlayer = GetPlayerPos(playerPos);
-				bool overlapping = false;
-				Vector targetPos = playerPos;
-
-				if (hasPlayer && !m_mcPhysicsActive) {
-					bool isDucking = (GetAsyncKeyState(VK_SHIFT) & 0x8000) != 0;
-					float pMinX = playerPos.x - 17.5f;
-					float pMaxX = playerPos.x + 17.5f;
-					float pMinY = playerPos.y - 17.5f;
-					float pMaxY = playerPos.y + 17.5f;
-					float pMinZ = playerPos.z - 6.0f;
-					float pMaxZ = playerPos.z + (isDucking ? 36.5f : 72.5f);
-
-					bool overlapX = (pMinX < bMaxX) && (pMaxX > bMinX);
-					bool overlapY = (pMinY < bMaxY) && (pMaxY > bMinY);
-					bool overlapZ = (pMinZ < bMaxZ) && (pMaxZ > bMinZ);
-
-					if (overlapX && overlapY && overlapZ) {
-						overlapping = true;
-						ComputeUnstickPos(playerPos, ibx, iby, ibz, targetPos);
-					}
+				if (lightLevel > 0) {
+					m_placedLights.push_back({ ibx, iby, ibz, lightLevel, lightType, lightLevel >= 15 && !hasCollision });
 				}
 
-				char cmd[1024];
-				if (overlapping) {
+				if (hasCollision) {
+					m_placedBlocks.insert({ibx, iby, ibz});
+
+					char cmd[512];
 					snprintf(cmd, sizeof(cmd),
-						"ent_create prop_physics_override model models/props_junk/wood_crate001a.mdl targetname mc_blk_%d_%d_%d disableshadows 1 disablereceiveshadows 1 rendermode 10 modelscale 0.99 solid 0; "
+						"ent_create prop_physics_override model models/props_junk/wood_crate001a.mdl targetname mc_blk_%d_%d_%d disableshadows 1 disablereceiveshadows 1 rendermode 10 modelscale 0.99 solid 6; "
 						"ent_fire mc_blk_%d_%d_%d addoutput \"origin %.2f %.2f %.2f\"; "
 						"ent_fire mc_blk_%d_%d_%d addoutput \"angles 0 0 0\"; "
 						"ent_fire mc_blk_%d_%d_%d addoutput \"rendermode 10\"; "
@@ -1863,35 +1946,9 @@ namespace hl2craft
 						"ent_fire mc_blk_%d_%d_%d DisableShadow; "
 						"ent_fire mc_blk_%d_%d_%d addoutput \"health 999999\"; "
 						"ent_fire mc_blk_%d_%d_%d addoutput \"takedamage 0\"; "
-						"ent_fire mc_blk_%d_%d_%d DisableMotion; "
-						"ent_fire mc_blk_%d_%d_%d addoutput \"solid 0\"",
+						"ent_fire mc_blk_%d_%d_%d DisableMotion",
 						ibx, iby, ibz,
 						ibx, iby, ibz, sx, sy, sz,
-						ibx, iby, ibz,
-						ibx, iby, ibz,
-						ibx, iby, ibz,
-						ibx, iby, ibz,
-						ibx, iby, ibz,
-						ibx, iby, ibz,
-						ibx, iby, ibz,
-						ibx, iby, ibz);
-					ExecCmd(cmd);
-					StartUnstickLift(targetPos, ibx, iby, ibz);
-				} else {
-					snprintf(cmd, sizeof(cmd),
-						"ent_create prop_physics_override model models/props_junk/wood_crate001a.mdl targetname mc_blk_%d_%d_%d disableshadows 1 disablereceiveshadows 1 rendermode 10 modelscale 0.99 solid 0; "
-						"ent_fire mc_blk_%d_%d_%d addoutput \"origin %.2f %.2f %.2f\"; "
-						"ent_fire mc_blk_%d_%d_%d addoutput \"angles 0 0 0\"; "
-						"ent_fire mc_blk_%d_%d_%d addoutput \"rendermode 10\"; "
-						"ent_fire mc_blk_%d_%d_%d addoutput \"effects 80\"; "
-						"ent_fire mc_blk_%d_%d_%d DisableShadow; "
-						"ent_fire mc_blk_%d_%d_%d addoutput \"health 999999\"; "
-						"ent_fire mc_blk_%d_%d_%d addoutput \"takedamage 0\"; "
-						"ent_fire mc_blk_%d_%d_%d DisableMotion; "
-						"ent_fire mc_blk_%d_%d_%d addoutput \"solid 6\"",
-						ibx, iby, ibz,
-						ibx, iby, ibz, sx, sy, sz,
-						ibx, iby, ibz,
 						ibx, iby, ibz,
 						ibx, iby, ibz,
 						ibx, iby, ibz,
@@ -1906,6 +1963,13 @@ namespace hl2craft
 				int iby = (int)std::round(ev->b);
 				int ibz = (int)std::round(ev->c);
 				m_placedBlocks.erase({ibx, iby, ibz});
+				for (auto it = m_placedLights.begin(); it != m_placedLights.end(); ) {
+					if (it->bx == ibx && it->by == iby && it->bz == ibz) {
+						it = m_placedLights.erase(it);
+					} else {
+						++it;
+					}
+				}
 				char cmd[128];
 				snprintf(cmd, sizeof(cmd), "ent_fire mc_blk_%d_%d_%d Kill", ibx, iby, ibz);
 				ExecCmd(cmd);
@@ -2214,53 +2278,46 @@ namespace hl2craft
 			}
 		}
 
-		// Horizontal-only subtle point_push: pitch = 0 (angles 0 yaw 0), ground-level Z, spawnflags 4 (linear falloff, never floats)
 		float len = std::sqrt(dir.x * dir.x + dir.y * dir.y);
 		if (len > 1e-4f) {
 			Vector nDir{ dir.x / len, dir.y / len, 0.0f };
-			static uint32_t s_kbPushCounter = 0;
-			uint32_t pushId = ++s_kbPushCounter;
-			float pushX = entPos.x - nDir.x * 16.0f;
-			float pushY = entPos.y - nDir.y * 16.0f;
-			float pushZ = entPos.z;
-			float yaw = std::atan2(nDir.y, nDir.x) * 180.0f / 3.14159265f;
-			int mag = isCrit ? 56 : 40; // Soft knockback (~0.35-0.4 blocks)
+			float speed = isCrit ? 260.0f : 190.0f;
+			if (strength > 0.8f) speed *= 1.25f;
+			float zBoost = isCrit ? 75.0f : 45.0f;
+			Vector impulse{ nDir.x * speed, nDir.y * speed, zBoost };
 
-			char cmd[512];
+			HMODULE hServer = GetModuleHandleA("server.dll");
+			if (hServer) {
+				char *pEntList = (char*)hServer + 0x6A74C0;
+				if (!IsBadReadPtr(pEntList, 0x10000)) {
+					void *pServerEnt = *(void**)(pEntList + 4 + entIndex * 16);
+					if (pServerEnt && !IsBadReadPtr(pServerEnt, sizeof(void*))) {
+						typedef void (__thiscall *ApplyAbsVelocityImpulseFn)(void*, const Vector&);
+						ApplyAbsVelocityImpulseFn applyImpulse = (ApplyAbsVelocityImpulseFn)((char*)hServer + 0x113E70);
+						applyImpulse(pServerEnt, impulse);
+
+						if (!IsBadReadPtr((char*)pServerEnt + 0x214, sizeof(Vector))) {
+							*(Vector*)((char*)pServerEnt + 0x208) = impulse;
+						}
+					}
+				}
+			}
+
 			if (isCrit) {
-				snprintf(cmd, sizeof(cmd),
-					"ent_create point_push targetname mc_kbp_%u; "
-					"ent_fire mc_kbp_%u addoutput \"origin %.2f %.2f %.2f\"; "
-					"ent_fire mc_kbp_%u addoutput \"angles 0 %.2f 0\"; "
-					"ent_fire mc_kbp_%u addoutput \"magnitude %d\"; "
-					"ent_fire mc_kbp_%u addoutput \"radius 44\"; "
-					"ent_fire mc_kbp_%u addoutput \"spawnflags 4\"; "
-					"ent_fire mc_kbp_%u Enable; "
-					"ent_fire mc_kbp_%u Kill \"\" 0.08; "
+				static uint32_t s_critSparkCounter = 0;
+				uint32_t sparkId = ++s_critSparkCounter;
+				char sparkCmd[256];
+				snprintf(sparkCmd, sizeof(sparkCmd),
 					"ent_create env_spark targetname mc_crt_%u; "
 					"ent_fire mc_crt_%u addoutput \"origin %.2f %.2f %.2f\"; "
 					"ent_fire mc_crt_%u addoutput \"Magnitude 2\"; "
 					"ent_fire mc_crt_%u addoutput \"TrailLength 2\"; "
 					"ent_fire mc_crt_%u SparkOnce; "
 					"ent_fire mc_crt_%u Kill \"\" 0.1",
-					pushId, pushId, pushX, pushY, pushZ,
-					pushId, yaw, pushId, mag, pushId, pushId, pushId, pushId,
-					pushId, pushId, entPos.x, entPos.y, entPos.z + 40.0f,
-					pushId, pushId, pushId, pushId);
-			} else {
-				snprintf(cmd, sizeof(cmd),
-					"ent_create point_push targetname mc_kbp_%u; "
-					"ent_fire mc_kbp_%u addoutput \"origin %.2f %.2f %.2f\"; "
-					"ent_fire mc_kbp_%u addoutput \"angles 0 %.2f 0\"; "
-					"ent_fire mc_kbp_%u addoutput \"magnitude %d\"; "
-					"ent_fire mc_kbp_%u addoutput \"radius 44\"; "
-					"ent_fire mc_kbp_%u addoutput \"spawnflags 4\"; "
-					"ent_fire mc_kbp_%u Enable; "
-					"ent_fire mc_kbp_%u Kill \"\" 0.08",
-					pushId, pushId, pushX, pushY, pushZ,
-					pushId, yaw, pushId, mag, pushId, pushId, pushId, pushId);
+					sparkId, sparkId, entPos.x, entPos.y, entPos.z + 40.0f,
+					sparkId, sparkId, sparkId, sparkId);
+				ExecCmd(sparkCmd);
 			}
-			ExecCmd(cmd);
 		}
 	}
 

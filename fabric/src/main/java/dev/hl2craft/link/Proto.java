@@ -88,6 +88,8 @@ public final class Proto {
 	public static final long MS_CAMERA_DISTANCE = 0x4C;
 	public static final long MS_SUPPORT_HEIGHT = 0x50;
 	public static final long MS_HEALTH = 0x54;
+	public static final long MS_HELD_LIGHT = 0x58;
+	public static final long MS_HELD_LIGHT_TYPE = 0x5C;
 
 	public static final int MC_IN_WORLD = 1;
 	public static final int MC_SCREEN_OPEN = 2;

@@ -99,6 +99,26 @@ namespace hl2craft
 		int hitbox;
 	};
 
+	struct ColorRGBExp32 {
+		uint8_t r, g, b;
+		int8_t exponent;
+	};
+
+	struct dlight_t {
+		int flags;
+		Vector origin;
+		float radius;
+		ColorRGBExp32 color;
+		float die;
+		float decay;
+		float minlight;
+		int key;
+		int style;
+		Vector m_Direction;
+		float m_InnerAngle;
+		float m_OuterAngle;
+	};
+
 	class ITraceFilter {
 	public:
 		virtual bool ShouldHitEntity(void *pEntity, int contentsMask) = 0;
@@ -221,6 +241,14 @@ namespace hl2craft
 		int m_viewH = 1080;
 		HWND m_hValveWnd = nullptr;
 		WNDPROC m_oldWndProc = nullptr;
+		struct PlacedLight {
+			int bx, by, bz;
+			int lightLevel;
+			int lightType; // 1: warm, 2: soul
+			bool isLava;
+		};
+		std::vector<PlacedLight> m_placedLights;
+
 		std::set<std::tuple<int, int, int>> m_placedBlocks;
 		DWORD m_lastBlockSyncTime = 0;
 		bool m_wasLoading = false;

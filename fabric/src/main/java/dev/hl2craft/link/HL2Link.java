@@ -186,6 +186,10 @@ public final class HL2Link {
 	}
 
 	public static void writeMcState(int flags, double x, double y, double z, float yaw, float pitch, float eyeHeight, float sens, int telAck, int guiScale, long frame, float fov, int mode, int cameraMode, float cameraDistance, float supportHeight, float health) {
+		writeMcState(flags, x, y, z, yaw, pitch, eyeHeight, sens, telAck, guiScale, frame, fov, mode, cameraMode, cameraDistance, supportHeight, health, 0, 0);
+	}
+
+	public static void writeMcState(int flags, double x, double y, double z, float yaw, float pitch, float eyeHeight, float sens, int telAck, int guiScale, long frame, float fov, int mode, int cameraMode, float cameraDistance, float supportHeight, float health, int heldLight, int heldLightType) {
 		MemorySegment s = shm;
 		if (s == null) {
 			return;
@@ -209,6 +213,8 @@ public final class HL2Link {
 		s.set(JAVA_FLOAT, OFF_MC_STATE + MS_CAMERA_DISTANCE, cameraDistance);
 		s.set(JAVA_FLOAT, OFF_MC_STATE + MS_SUPPORT_HEIGHT, supportHeight);
 		s.set(JAVA_FLOAT, OFF_MC_STATE + MS_HEALTH, health);
+		s.set(JAVA_INT, OFF_MC_STATE + MS_HELD_LIGHT, heldLight);
+		s.set(JAVA_INT, OFF_MC_STATE + MS_HELD_LIGHT_TYPE, heldLightType);
 		INT.setRelease(s, OFF_MC_STATE + MS_SEQ, seq + 2);
 	}
 
