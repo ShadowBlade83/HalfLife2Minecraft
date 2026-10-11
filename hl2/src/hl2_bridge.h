@@ -161,7 +161,7 @@ namespace hl2craft
 		void ProcessInput();
 		void ComputeUnstickPos(const Vector &playerPos, int ibx, int iby, int ibz, Vector &outPos);
 		void StartUnstickLift(const Vector &targetPos, int ibx, int iby, int ibz);
-		void StartNpcKnockback(int entIndex, const Vector &entPos, const Vector &dir, float strength, bool isCrit);
+		void StartNpcKnockback(int entIndex, const Vector &entPos, const Vector &dir, float strength, bool isCrit, int applyDmg = 35);
 		void UpdateNpcKnockbacks();
 
 		struct ActiveKnockback {

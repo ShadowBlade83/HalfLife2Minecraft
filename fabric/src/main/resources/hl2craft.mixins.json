@@ -10,6 +10,7 @@
     "BlockPlaceContextMixin",
     "EntityPickMixin",
     "FallingBlockMixin",
+    "FlowingFluidMixin",
     "ItemMixin",
     "LevelMixin",
     "MinecraftServerFlightMixin",
