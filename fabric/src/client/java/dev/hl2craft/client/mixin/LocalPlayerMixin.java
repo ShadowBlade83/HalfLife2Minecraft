@@ -48,8 +48,84 @@ abstract class LocalPlayerMixin {
 		}
 
 		dev.hl2craft.world.HL2Collision.ensurePlayerFloorAndStep(self.getX(), self.getY(), self.getZ(), hostFeetY);
+		pushOutOfBlocksAndWalls(self);
 		if (self.isFallFlying()) {
 			self.setOnGround(false);
+		}
+	}
+
+	private static void pushOutOfBlocksAndWalls(LocalPlayer self) {
+		var level = self.level();
+		var box = self.getBoundingBox();
+		if (level.noCollision(self, box.deflate(1.0e-4))) {
+			return;
+		}
+
+		// 1. Try pushing straight UP first (up to 1.05 blocks) — handles pillaring upwards and floor/step overlap
+		for (int i = 1; i <= 26; i++) {
+			double dy = i * 0.04;
+			if (level.noCollision(self, box.move(0.0, dy, 0.0))) {
+				self.setPos(self.getX(), self.getY() + dy, self.getZ());
+				self.setOnGround(true);
+				Vec3 dm = self.getDeltaMovement();
+				if (dm.y < 0.0) {
+					self.setDeltaMovement(dm.x, 0.0, dm.z);
+				}
+				return;
+			}
+		}
+
+		// 2. Try pushing back along previous position vector (e.g. high-speed Elytra flight into a wall)
+		double backDx = self.xOld - self.getX();
+		double backDy = self.yOld - self.getY();
+		double backDz = self.zOld - self.getZ();
+		if (backDx * backDx + backDy * backDy + backDz * backDz > 1.0e-4) {
+			for (int step = 1; step <= 8; step++) {
+				double t = step / 8.0;
+				double tx = backDx * t;
+				double ty = backDy * t;
+				double tz = backDz * t;
+				if (level.noCollision(self, box.move(tx, ty, tz))) {
+					self.setPos(self.getX() + tx, self.getY() + ty, self.getZ() + tz);
+					self.setDeltaMovement(Vec3.ZERO);
+					return;
+				}
+			}
+		}
+
+		// 3. Radial 3D push-out to the nearest collision-free space (walls, corners, ceilings)
+		double[] yOffsets = { 0.0, 0.25, -0.25, 0.5, -0.5, -0.8 };
+		for (int rStep = 1; rStep <= 24; rStep++) {
+			double r = rStep * 0.075;
+			for (double dy : yOffsets) {
+				if (rStep <= 8 && dy == 0.0) {
+					// Check pure downward push-out for low ceilings
+					if (level.noCollision(self, box.move(0.0, -r, 0.0))) {
+						self.setPos(self.getX(), self.getY() - r, self.getZ());
+						Vec3 dm = self.getDeltaMovement();
+						if (dm.y > 0.0) {
+							self.setDeltaMovement(dm.x, 0.0, dm.z);
+						}
+						return;
+					}
+				}
+				for (int dir = 0; dir < 16; dir++) {
+					double angle = dir * (Math.PI / 8.0);
+					double dx = Math.cos(angle) * r;
+					double dz = Math.sin(angle) * r;
+					if (level.noCollision(self, box.move(dx, dy, dz))) {
+						self.setPos(self.getX() + dx, self.getY() + dy, self.getZ() + dz);
+						Vec3 dm = self.getDeltaMovement();
+						double nx = Math.cos(angle);
+						double nz = Math.sin(angle);
+						double dot = dm.x * nx + dm.z * nz;
+						if (dot < 0.0) {
+							self.setDeltaMovement(dm.x - dot * nx, dm.y, dm.z - dot * nz);
+						}
+						return;
+					}
+				}
+			}
 		}
 	}
 
@@ -60,6 +136,8 @@ abstract class LocalPlayerMixin {
 		if (snap == null || !snap.inPlayable() || snap.hl2PhysicsOverride()) {
 			return;
 		}
+
+		pushOutOfBlocksAndWalls(self);
 
 		if (snap.onLadder() && !self.getAbilities().flying && !self.isFallFlying()) {
 			self.fallDistance = 0.0f;

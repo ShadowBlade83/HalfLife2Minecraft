@@ -39,17 +39,10 @@ public abstract class BlockCollisionsMixin {
 			return blockShape;
 		}
 		if (context instanceof net.minecraft.world.phys.shapes.EntityCollisionContext entityContext
-			&& entityContext.getEntity() instanceof net.minecraft.world.entity.player.Player player) {
+			&& entityContext.getEntity() instanceof net.minecraft.world.entity.player.Player) {
 			dev.hl2craft.link.HL2Link.HostSnapshot snap = dev.hl2craft.link.HL2Link.readHost();
 			if (snap != null && snap.hl2PhysicsOverride()) {
 				return blockShape;
-			}
-			// Never allow an HL2 wall/ceiling shape (above step height) that already overlaps the player's interior to trap the player
-			if (pos.getY() >= (int) Math.floor(player.getY() + 0.45)) {
-				VoxelShape worldHl2 = hl2.move(pos.getX(), pos.getY(), pos.getZ());
-				if (Shapes.joinIsNotEmpty(worldHl2, Shapes.create(player.getBoundingBox().deflate(0.015)), net.minecraft.world.phys.shapes.BooleanOp.AND)) {
-					return blockShape;
-				}
 			}
 		}
 		return blockShape.isEmpty() ? hl2 : Shapes.or(blockShape, hl2);

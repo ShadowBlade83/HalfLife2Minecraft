@@ -40,6 +40,31 @@ namespace hl2craft
 			m_StartOffset.x = m_StartOffset.y = m_StartOffset.z = m_StartOffset.w = 0;
 			m_Start.x = start.x; m_Start.y = start.y; m_Start.z = start.z; m_Start.w = 0;
 		}
+
+		void InitHull(const Vector &start, const Vector &end, const Vector &mins, const Vector &maxs) {
+			m_Delta.x = end.x - start.x;
+			m_Delta.y = end.y - start.y;
+			m_Delta.z = end.z - start.z;
+			m_Delta.w = 0;
+			m_pWorldAxisTransform = nullptr;
+			m_IsSwept = (m_Delta.x * m_Delta.x + m_Delta.y * m_Delta.y + m_Delta.z * m_Delta.z != 0);
+			m_Extents.x = (maxs.x - mins.x) * 0.5f;
+			m_Extents.y = (maxs.y - mins.y) * 0.5f;
+			m_Extents.z = (maxs.z - mins.z) * 0.5f;
+			m_Extents.w = 0;
+			m_IsRay = (m_Extents.x * m_Extents.x + m_Extents.y * m_Extents.y + m_Extents.z * m_Extents.z < 1.0e-6f);
+			m_StartOffset.x = (mins.x + maxs.x) * 0.5f;
+			m_StartOffset.y = (mins.y + maxs.y) * 0.5f;
+			m_StartOffset.z = (mins.z + maxs.z) * 0.5f;
+			m_StartOffset.w = 0;
+			m_Start.x = start.x + m_StartOffset.x;
+			m_Start.y = start.y + m_StartOffset.y;
+			m_Start.z = start.z + m_StartOffset.z;
+			m_Start.w = 0;
+			m_StartOffset.x = -m_StartOffset.x;
+			m_StartOffset.y = -m_StartOffset.y;
+			m_StartOffset.z = -m_StartOffset.z;
+		}
 	};
 
 	struct cplane_t {

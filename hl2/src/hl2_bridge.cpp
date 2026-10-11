@@ -455,8 +455,35 @@ namespace hl2craft
 		}
 	}
 
-	static bool IsNpcClass(const char *className);
-	static bool IsPropClass(const char *className);
+	static bool IsNpcClass(const char *className)
+	{
+		if (!className || !className[0]) return false;
+		if (strstr(className, "Player") != nullptr) return false;
+		if (strstr(className, "NPC") != nullptr) return true;
+		if (strstr(className, "Zombie") != nullptr) return true;
+		if (strstr(className, "Headcrab") != nullptr) return true;
+		if (strstr(className, "Antlion") != nullptr) return true;
+		if (strstr(className, "Vortigaunt") != nullptr) return true;
+		if (strstr(className, "Combine") != nullptr) return true;
+		if (strstr(className, "Barnacle") != nullptr) return true;
+		if (strstr(className, "Manhack") != nullptr) return true;
+		if (strstr(className, "Scanner") != nullptr) return true;
+		if (strstr(className, "Strider") != nullptr) return true;
+		if (strstr(className, "Gunship") != nullptr) return true;
+		if (strstr(className, "Helicopter") != nullptr) return true;
+		if (strstr(className, "Rollermine") != nullptr) return true;
+		if (strstr(className, "Stalker") != nullptr) return true;
+		return false;
+	}
+
+	static bool IsPropClass(const char *className)
+	{
+		if (!className || !className[0]) return false;
+		if (strstr(className, "Prop") != nullptr) return true;
+		if (strstr(className, "Physics") != nullptr) return true;
+		if (strstr(className, "Breakable") != nullptr) return true;
+		return false;
+	}
 
 	static bool IsVehicleClass(const char *className)
 	{
@@ -468,6 +495,117 @@ namespace hl2craft
 		if (strstr(className, "PrisonerPod") != nullptr) return true;
 		return false;
 	}
+
+	class CTraceFilterEnvironment : public ITraceFilter {
+	public:
+		void *pPlayer = nullptr;
+		const std::set<std::tuple<int, int, int>> *pPlacedBlocks = nullptr;
+		virtual bool ShouldHitEntity(void *pEntity, int contentsMask) {
+			if (!pEntity || pEntity == pPlayer) return false;
+			void *networkable = (char*)pEntity + 8;
+			const char *className = "";
+			if (!IsBadReadPtr(networkable, sizeof(void*))) {
+				void **netVt = *(void***)networkable;
+				if (!IsBadReadPtr(netVt, sizeof(void*) * 3)) {
+					typedef void* (__thiscall *GetClientClassFn)(void*);
+					void *clientClass = ((GetClientClassFn)netVt[2])(networkable);
+					if (clientClass && !IsBadReadPtr(clientClass, sizeof(void*) * 3)) {
+						className = *(const char**)((char*)clientClass + 8);
+					}
+				}
+			}
+			if (IsNpcClass(className) || IsVehicleClass(className)) return false;
+			if (pPlacedBlocks && !pPlacedBlocks->empty() && IsPropClass(className)) {
+				void *renderable = (char*)pEntity + 4;
+				if (!IsBadReadPtr(renderable, sizeof(void*))) {
+					void **rendVt = *(void***)renderable;
+					if (!IsBadReadPtr(rendVt, sizeof(void*) * 2)) {
+						typedef const float* (__thiscall *GetOriginFn)(void*);
+						const float *org = ((GetOriginFn)rendVt[1])(renderable);
+						if (org && !IsBadReadPtr(org, sizeof(float) * 3)) {
+							int bx = (int)std::floor(org[0] * proto::kMetersPerUnit);
+							int by = (int)std::floor(org[2] * proto::kMetersPerUnit + 64.0);
+							int bz = (int)std::floor(-org[1] * proto::kMetersPerUnit);
+							for (int dy = -1; dy <= 1; ++dy) {
+								for (int dx = -1; dx <= 1; ++dx) {
+									for (int dz = -1; dz <= 1; ++dz) {
+										if (pPlacedBlocks->find({bx + dx, by + dy, bz + dz}) != pPlacedBlocks->end()) {
+											float cbx = (bx + dx + 0.5f) * (float)proto::kUnitsPerBlock;
+											float cby = -(bz + dz + 0.5f) * (float)proto::kUnitsPerBlock;
+											float cbz = (by + dy + 0.5f - 64.0f) * (float)proto::kUnitsPerBlock;
+							if (std::abs(org[0] - cbx) < 22.0f &&
+							    std::abs(org[1] - cby) < 22.0f &&
+							    std::abs(org[2] - cbz) < 22.0f) {
+								return false; // Ignore our own placed block props (Minecraft already has their BlockState)
+							}
+										}
+									}
+								}
+							}
+						}
+					}
+				}
+			}
+			return true;
+		}
+		virtual int GetTraceType() const { return 0; } // TRACE_EVERYTHING
+	};
+
+	class CTraceFilterCombat : public ITraceFilter {
+	public:
+		void *pPlayer = nullptr;
+		const std::set<std::tuple<int, int, int>> *pPlacedBlocks = nullptr;
+		virtual bool ShouldHitEntity(void *pEntity, int contentsMask) {
+			if (!pEntity || pEntity == pPlayer) return false;
+			if (pPlacedBlocks && !pPlacedBlocks->empty()) {
+				void *networkable = (char*)pEntity + 8;
+				const char *className = "";
+				if (!IsBadReadPtr(networkable, sizeof(void*))) {
+					void **netVt = *(void***)networkable;
+					if (!IsBadReadPtr(netVt, sizeof(void*) * 3)) {
+						typedef void* (__thiscall *GetClientClassFn)(void*);
+						void *clientClass = ((GetClientClassFn)netVt[2])(networkable);
+						if (clientClass && !IsBadReadPtr(clientClass, sizeof(void*) * 3)) {
+							className = *(const char**)((char*)clientClass + 8);
+						}
+					}
+				}
+				if (IsPropClass(className)) {
+					void *renderable = (char*)pEntity + 4;
+					if (!IsBadReadPtr(renderable, sizeof(void*))) {
+						void **rendVt = *(void***)renderable;
+						if (!IsBadReadPtr(rendVt, sizeof(void*) * 2)) {
+							typedef const float* (__thiscall *GetOriginFn)(void*);
+							const float *org = ((GetOriginFn)rendVt[1])(renderable);
+							if (org && !IsBadReadPtr(org, sizeof(float) * 3)) {
+								int bx = (int)std::floor(org[0] * proto::kMetersPerUnit);
+								int by = (int)std::floor(org[2] * proto::kMetersPerUnit + 64.0);
+								int bz = (int)std::floor(-org[1] * proto::kMetersPerUnit);
+								for (int dy = -1; dy <= 1; ++dy) {
+									for (int dx = -1; dx <= 1; ++dx) {
+										for (int dz = -1; dz <= 1; ++dz) {
+											if (pPlacedBlocks->find({bx + dx, by + dy, bz + dz}) != pPlacedBlocks->end()) {
+												float cbx = (bx + dx + 0.5f) * (float)proto::kUnitsPerBlock;
+												float cby = -(bz + dz + 0.5f) * (float)proto::kUnitsPerBlock;
+												float cbz = (by + dy + 0.5f - 64.0f) * (float)proto::kUnitsPerBlock;
+												if (std::abs(org[0] - cbx) < 22.0f &&
+												    std::abs(org[1] - cby) < 22.0f &&
+												    std::abs(org[2] - cbz) < 22.0f) {
+													return false; // Ignore our invisible placed block collision props!
+												}
+											}
+										}
+									}
+								}
+							}
+						}
+					}
+				}
+			}
+			return true;
+		}
+		virtual int GetTraceType() const { return 0; } // TRACE_EVERYTHING
+	};
 
 	void HL2Bridge::UpdateHostState(const Vector &pos, const QAngle &angles)
 	{
@@ -698,6 +836,101 @@ namespace hl2craft
 			float sy = -(float)ms->z * (float)proto::kUnitsPerBlock;
 			float sz = ((float)ms->y + eyeOffsetBlocks - 64.0f) * (float)proto::kUnitsPerBlock;
 
+			// Real-time Source Engine 3D hull wall collision & push-out (prevents flying/walking through any HL2 wall at any altitude)
+			if (m_engineTrace && m_hasLastSentMcPos) {
+				void **tvt = *(void***)m_engineTrace;
+				if (tvt && tvt[4]) {
+					typedef void (__thiscall *TraceRayFn)(void*, const Ray_t&, unsigned int, ITraceFilter*, trace_t*);
+					TraceRayFn traceRay = (TraceRayFn)tvt[4];
+					CTraceFilterEnvironment envFilter;
+					envFilter.pPlayer = GetLocalPlayerEntity();
+					envFilter.pPlacedBlocks = &m_placedBlocks;
+
+					constexpr unsigned int kPlayerSolidMask = 0x201400B; // MASK_PLAYERSOLID (includes playerclip & moveable brushes)
+					Vector hullMins{ -11.5f, -11.5f, 20.0f };
+					Vector hullMaxs{  11.5f,  11.5f, 56.0f };
+					Vector targetPos{ sx, sy, sz };
+
+					Ray_t hullRay;
+					hullRay.InitHull(m_lastSentMcPos, targetPos, hullMins, hullMaxs);
+					trace_t trHull;
+					std::memset(&trHull, 0, sizeof(trHull));
+					traceRay(m_engineTrace, hullRay, kPlayerSolidMask, &envFilter, &trHull);
+
+					bool pushedOut = false;
+					if (trHull.startsolid) {
+						// Player hull is overlapping an HL2 wall -> push radially outward to nearest free space
+						for (int rStep = 1; rStep <= 8 && !pushedOut; ++rStep) {
+							float r = rStep * 6.0f;
+							for (int d = 0; d < 8; ++d) {
+								float ang = d * (3.14159265f * 0.25f);
+								Vector cand{ sx + std::cos(ang) * r, sy + std::sin(ang) * r, sz };
+								Ray_t testRay;
+								testRay.InitHull(cand, cand, hullMins, hullMaxs);
+								trace_t trTest;
+								std::memset(&trTest, 0, sizeof(trTest));
+								traceRay(m_engineTrace, testRay, kPlayerSolidMask, &envFilter, &trTest);
+								if (!trTest.startsolid) {
+									sx = cand.x;
+									sy = cand.y;
+									pushedOut = true;
+									break;
+								}
+							}
+						}
+					} else if (trHull.fraction < 1.0f && std::abs(trHull.plane.normal.z) < 0.65f) {
+						// Hit a vertical/angled HL2 wall -> slide along wall plane and push out slightly from wall normal
+						Vector n = trHull.plane.normal;
+						Vector stopPos{
+							trHull.endpos.x + n.x * 0.5f,
+							trHull.endpos.y + n.y * 0.5f,
+							trHull.endpos.z + n.z * 0.5f
+						};
+						Vector rem{ targetPos.x - stopPos.x, targetPos.y - stopPos.y, targetPos.z - stopPos.z };
+						float dot = rem.x * n.x + rem.y * n.y + rem.z * n.z;
+						if (dot < 0.0f) {
+							rem.x -= dot * n.x;
+							rem.y -= dot * n.y;
+							rem.z -= dot * n.z;
+						}
+						Vector slideTarget{ stopPos.x + rem.x, stopPos.y + rem.y, stopPos.z + rem.z };
+						Ray_t slideRay;
+						slideRay.InitHull(stopPos, slideTarget, hullMins, hullMaxs);
+						trace_t trSlide;
+						std::memset(&trSlide, 0, sizeof(trSlide));
+						traceRay(m_engineTrace, slideRay, kPlayerSolidMask, &envFilter, &trSlide);
+						if (!trSlide.startsolid) {
+							sx = trSlide.endpos.x + n.x * 0.25f;
+							sy = trSlide.endpos.y + n.y * 0.25f;
+							sz = trSlide.endpos.z;
+						} else {
+							sx = stopPos.x;
+							sy = stopPos.y;
+							sz = stopPos.z;
+						}
+						float corrSq = (sx - targetPos.x) * (sx - targetPos.x) + (sy - targetPos.y) * (sy - targetPos.y);
+						if (corrSq > 16.0f) {
+							pushedOut = true;
+						}
+					}
+
+					if (pushedOut) {
+						double corrMcX = sx * proto::kMetersPerUnit;
+						double corrMcZ = -sy * proto::kMetersPerUnit;
+						double corrMcFeetY = (sz * proto::kMetersPerUnit) + kYOffset - eyeOffsetBlocks;
+						hs->seq = seq + 3;
+						MemoryBarrier();
+						hs->posX = corrMcX;
+						hs->posY = corrMcFeetY + mcEyeH;
+						hs->posZ = corrMcZ;
+						m_teleportSeq++;
+						hs->teleportSeq = m_teleportSeq;
+						MemoryBarrier();
+						hs->seq = seq + 4;
+					}
+				}
+			}
+
 			m_lastSentMcPos = Vector{ sx, sy, sz };
 			m_hasLastSentMcPos = true;
 
@@ -857,147 +1090,6 @@ namespace hl2craft
 		m_creative = (ms->gameMode == 1);
 	}
 
-	static bool IsNpcClass(const char *className)
-	{
-		if (!className || !className[0]) return false;
-		if (strstr(className, "Player") != nullptr) return false;
-		if (strstr(className, "NPC") != nullptr) return true;
-		if (strstr(className, "Zombie") != nullptr) return true;
-		if (strstr(className, "Headcrab") != nullptr) return true;
-		if (strstr(className, "Antlion") != nullptr) return true;
-		if (strstr(className, "Vortigaunt") != nullptr) return true;
-		if (strstr(className, "Combine") != nullptr) return true;
-		if (strstr(className, "Barnacle") != nullptr) return true;
-		if (strstr(className, "Manhack") != nullptr) return true;
-		if (strstr(className, "Scanner") != nullptr) return true;
-		if (strstr(className, "Strider") != nullptr) return true;
-		if (strstr(className, "Gunship") != nullptr) return true;
-		if (strstr(className, "Helicopter") != nullptr) return true;
-		if (strstr(className, "Rollermine") != nullptr) return true;
-		if (strstr(className, "Stalker") != nullptr) return true;
-		return false;
-	}
-
-	static bool IsPropClass(const char *className)
-	{
-		if (!className || !className[0]) return false;
-		if (strstr(className, "Prop") != nullptr) return true;
-		if (strstr(className, "Physics") != nullptr) return true;
-		if (strstr(className, "Breakable") != nullptr) return true;
-		return false;
-	}
-
-	class CTraceFilterEnvironment : public ITraceFilter {
-	public:
-		void *pPlayer = nullptr;
-		const std::set<std::tuple<int, int, int>> *pPlacedBlocks = nullptr;
-		virtual bool ShouldHitEntity(void *pEntity, int contentsMask) {
-			if (!pEntity || pEntity == pPlayer) return false;
-			void *networkable = (char*)pEntity + 8;
-			const char *className = "";
-			if (!IsBadReadPtr(networkable, sizeof(void*))) {
-				void **netVt = *(void***)networkable;
-				if (!IsBadReadPtr(netVt, sizeof(void*) * 3)) {
-					typedef void* (__thiscall *GetClientClassFn)(void*);
-					void *clientClass = ((GetClientClassFn)netVt[2])(networkable);
-					if (clientClass && !IsBadReadPtr(clientClass, sizeof(void*) * 3)) {
-						className = *(const char**)((char*)clientClass + 8);
-					}
-				}
-			}
-			if (IsNpcClass(className) || IsVehicleClass(className)) return false;
-			if (pPlacedBlocks && !pPlacedBlocks->empty() && IsPropClass(className)) {
-				void *renderable = (char*)pEntity + 4;
-				if (!IsBadReadPtr(renderable, sizeof(void*))) {
-					void **rendVt = *(void***)renderable;
-					if (!IsBadReadPtr(rendVt, sizeof(void*) * 2)) {
-						typedef const float* (__thiscall *GetOriginFn)(void*);
-						const float *org = ((GetOriginFn)rendVt[1])(renderable);
-						if (org && !IsBadReadPtr(org, sizeof(float) * 3)) {
-							int bx = (int)std::floor(org[0] * proto::kMetersPerUnit);
-							int by = (int)std::floor(org[2] * proto::kMetersPerUnit + 64.0);
-							int bz = (int)std::floor(-org[1] * proto::kMetersPerUnit);
-							for (int dy = -1; dy <= 1; ++dy) {
-								for (int dx = -1; dx <= 1; ++dx) {
-									for (int dz = -1; dz <= 1; ++dz) {
-										if (pPlacedBlocks->find({bx + dx, by + dy, bz + dz}) != pPlacedBlocks->end()) {
-											float cbx = (bx + dx + 0.5f) * (float)proto::kUnitsPerBlock;
-											float cby = -(bz + dz + 0.5f) * (float)proto::kUnitsPerBlock;
-											float cbz = (by + dy + 0.5f - 64.0f) * (float)proto::kUnitsPerBlock;
-											if (std::abs(org[0] - cbx) < 22.0f &&
-											    std::abs(org[1] - cby) < 22.0f &&
-											    std::abs(org[2] - cbz) < 22.0f) {
-												return false; // Ignore our own placed block props (Minecraft already has their BlockState)
-											}
-										}
-									}
-								}
-							}
-						}
-					}
-				}
-			}
-			return true;
-		}
-		virtual int GetTraceType() const { return 0; } // TRACE_EVERYTHING
-	};
-
-	class CTraceFilterCombat : public ITraceFilter {
-	public:
-		void *pPlayer = nullptr;
-		const std::set<std::tuple<int, int, int>> *pPlacedBlocks = nullptr;
-		virtual bool ShouldHitEntity(void *pEntity, int contentsMask) {
-			if (!pEntity || pEntity == pPlayer) return false;
-			if (pPlacedBlocks && !pPlacedBlocks->empty()) {
-				void *networkable = (char*)pEntity + 8;
-				const char *className = "";
-				if (!IsBadReadPtr(networkable, sizeof(void*))) {
-					void **netVt = *(void***)networkable;
-					if (!IsBadReadPtr(netVt, sizeof(void*) * 3)) {
-						typedef void* (__thiscall *GetClientClassFn)(void*);
-						void *clientClass = ((GetClientClassFn)netVt[2])(networkable);
-						if (clientClass && !IsBadReadPtr(clientClass, sizeof(void*) * 3)) {
-							className = *(const char**)((char*)clientClass + 8);
-						}
-					}
-				}
-				if (IsPropClass(className)) {
-					void *renderable = (char*)pEntity + 4;
-					if (!IsBadReadPtr(renderable, sizeof(void*))) {
-						void **rendVt = *(void***)renderable;
-						if (!IsBadReadPtr(rendVt, sizeof(void*) * 2)) {
-							typedef const float* (__thiscall *GetOriginFn)(void*);
-							const float *org = ((GetOriginFn)rendVt[1])(renderable);
-							if (org && !IsBadReadPtr(org, sizeof(float) * 3)) {
-								int bx = (int)std::floor(org[0] * proto::kMetersPerUnit);
-								int by = (int)std::floor(org[2] * proto::kMetersPerUnit + 64.0);
-								int bz = (int)std::floor(-org[1] * proto::kMetersPerUnit);
-								for (int dy = -1; dy <= 1; ++dy) {
-									for (int dx = -1; dx <= 1; ++dx) {
-										for (int dz = -1; dz <= 1; ++dz) {
-											if (pPlacedBlocks->find({bx + dx, by + dy, bz + dz}) != pPlacedBlocks->end()) {
-												float cbx = (bx + dx + 0.5f) * (float)proto::kUnitsPerBlock;
-												float cby = -(bz + dz + 0.5f) * (float)proto::kUnitsPerBlock;
-												float cbz = (by + dy + 0.5f - 64.0f) * (float)proto::kUnitsPerBlock;
-												if (std::abs(org[0] - cbx) < 22.0f &&
-												    std::abs(org[1] - cby) < 22.0f &&
-												    std::abs(org[2] - cbz) < 22.0f) {
-													return false; // Ignore our invisible placed block collision props!
-												}
-											}
-										}
-									}
-								}
-							}
-						}
-					}
-				}
-			}
-			return true;
-		}
-		virtual int GetTraceType() const { return 0; } // TRACE_EVERYTHING
-	};
-
 	typedef BOOL (WINAPI *SetCursorPosFn)(int, int);
 	static SetCursorPosFn g_realSetCursorPos = nullptr;
 	static uint8_t g_savedCursorBytes[5] = {0};
@@ -1047,7 +1139,8 @@ namespace hl2craft
 		constexpr float kBlockUnits = (float)proto::kUnitsPerBlock;
 
 		constexpr double kYOffset = 64.0;
-		constexpr unsigned int kStaticWorldMask = 0x200400B; // MASK_SOLID (brushes, static props, grates, windows)
+		constexpr unsigned int kStaticWorldMask = 0x201400B; // MASK_PLAYERSOLID (brushes, playerclip, moveable doors, static props, grates, windows)
+		constexpr unsigned int kSolidContentsMask = 0x1400B;
 
 		g_inTrace = true;
 		if (setjmp(g_traceJmp) != 0) {
@@ -1071,21 +1164,25 @@ namespace hl2craft
 		int centerBx = (int)std::floor(playerPos.x * proto::kMetersPerUnit);
 		int centerBz = (int)std::floor(-playerPos.y * proto::kMetersPerUnit);
 		int centerBy = (int)std::floor((baseFloorZ * proto::kMetersPerUnit) + kYOffset);
+		int playerBy = (int)std::floor((playerPos.z * proto::kMetersPerUnit) + kYOffset);
 
 		int minX = centerBx - r, maxX = centerBx + r;
 		int minZ = centerBz - r, maxZ = centerBz + r;
-		int minY = centerBy - 14, maxY = centerBy + 14;
+		int minY = std::min(centerBy, playerBy) - 10;
+		int maxY = std::max(centerBy, playerBy) + 10;
 
 		std::vector<proto::ColBlock> blocks;
-		blocks.reserve(gridSize * gridSize * 5);
+		blocks.reserve(gridSize * gridSize * 6);
 
 		int floorGrid[kMaxGridSize][kMaxGridSize];
 		float floorZGrid[kMaxGridSize][kMaxGridSize];
+		float floorNzGrid[kMaxGridSize][kMaxGridSize];
 		int floorSubGrid[kMaxGridSize][kMaxGridSize];
 		for (int x = 0; x < gridSize; x++) {
 			for (int z = 0; z < gridSize; z++) {
 				floorGrid[x][z] = -9999;
 				floorZGrid[x][z] = 0.0f;
+				floorNzGrid[x][z] = 1.0f;
 				floorSubGrid[x][z] = 7;
 			}
 		}
@@ -1102,10 +1199,10 @@ namespace hl2craft
 				float hzEnd = baseFloorZ - 420.0f;
 
 				// Only raise hzStart if the lower point is inside solid geometry (stairs/slopes/crates), NEVER across open air into a ceiling/lintel
-				if (getPointContents && (getPointContents(m_engineTrace, Vector{hx, hy, hzStart}, nullptr) & 0xB) != 0) {
-					if ((getPointContents(m_engineTrace, Vector{hx, hy, baseFloorZ + 34.0f}, nullptr) & 0xB) == 0) {
+				if (getPointContents && (getPointContents(m_engineTrace, Vector{hx, hy, hzStart}, nullptr) & kSolidContentsMask) != 0) {
+					if ((getPointContents(m_engineTrace, Vector{hx, hy, baseFloorZ + 34.0f}, nullptr) & kSolidContentsMask) == 0) {
 						hzStart = baseFloorZ + 34.0f;
-					} else if ((getPointContents(m_engineTrace, Vector{hx, hy, baseFloorZ + 48.0f}, nullptr) & 0xB) == 0) {
+					} else if ((getPointContents(m_engineTrace, Vector{hx, hy, baseFloorZ + 48.0f}, nullptr) & kSolidContentsMask) == 0) {
 						hzStart = baseFloorZ + 48.0f;
 					}
 				}
@@ -1125,6 +1222,7 @@ namespace hl2craft
 						int sub = std::clamp((int)((floorYMc - by) * 8.0f), 0, 7);
 						floorGrid[ix][iz] = by;
 						floorZGrid[ix][iz] = floorZ;
+						floorNzGrid[ix][iz] = tr.plane.normal.z;
 						floorSubGrid[ix][iz] = sub;
 
 						float nx = tr.plane.normal.x;
@@ -1198,8 +1296,10 @@ namespace hl2craft
 			{ 0x000000000F0F0F0FULL, 0x0F0F0F0F00000000ULL },
 			{ 0x00000000F0F0F0F0ULL, 0xF0F0F0F000000000ULL }
 		};
+		Vector qMins{ -9.5f, -9.5f, -8.0f };
+		Vector qMaxs{  9.5f,  9.5f,  8.0f };
 
-		// Pass 2: Half-block (2x2 quadrant) walls, fences, closed doors, crouch-vents, and ceilings
+		// Pass 2: 3D Box Quadrant walls, fences, closed doors, crouch-vents, ceilings, and flight-altitude walls
 		for (int ix = 0; ix < gridSize; ix++) {
 			int bx = minX + ix;
 			for (int iz = 0; iz < gridSize; iz++) {
@@ -1210,21 +1310,23 @@ namespace hl2craft
 
 				if (by == -9999) {
 					uint64_t solidMask = 0ULL;
-					float testZ = baseFloorZ + 36.0f;
+					float testZ = playerPos.z + 36.0f;
 					for (int qx = 0; qx < 2; ++qx) {
 						for (int qz = 0; qz < 2; ++qz) {
 							float qcx = (bx + 0.25f + qx * 0.5f) * kBlockUnits;
 							float qcy = -(bz + 0.25f + qz * 0.5f) * kBlockUnits;
-							float pdx = qcx - playerPos.x;
-							float pdy = qcy - playerPos.y;
-							if (pdx * pdx + pdy * pdy < 18.0f * 18.0f) continue;
-							if (getPointContents && ((getPointContents(m_engineTrace, Vector{qcx, qcy, testZ}, nullptr) & 0xB) != 0)) {
+							Ray_t qRay;
+							qRay.InitHull(Vector{qcx, qcy, testZ}, Vector{qcx, qcy, testZ}, qMins, qMaxs);
+							trace_t qTr;
+							std::memset(&qTr, 0, sizeof(qTr));
+							traceRay(m_engineTrace, qRay, kStaticWorldMask, &filter, &qTr);
+							if (qTr.startsolid) {
 								solidMask |= kQuadMasks[qx][qz];
 							}
 						}
 					}
 					if (solidMask != 0ULL) {
-						for (int wy = centerBy; wy <= centerBy + 2; wy++) {
+						for (int wy = std::min(centerBy, playerBy); wy <= std::max(centerBy, playerBy) + 2; wy++) {
 							proto::ColBlock wb;
 							wb.x = bx; wb.y = wy; wb.z = bz; wb.pad = 0;
 							for (int l = 0; l < 8; l++) wb.bits[l] = solidMask;
@@ -1235,78 +1337,78 @@ namespace hl2craft
 				}
 
 				float floorZ = floorZGrid[ix][iz];
+				float floorNz = floorNzGrid[ix][iz];
 				int sub = floorSubGrid[ix][iz];
-				float zLow = floorZ + 30.0f;
-				float zMid = floorZ + 52.0f;
+				// On flat floors test at floorZ + 40 (+/- 8 = 32..48 units, above 18-unit stairs); on slopes test higher (+54) so the slope itself isn't hit
+				float zWallTest = (floorNz > 0.96f) ? (floorZ + 40.0f) : (floorZ + 54.0f);
 
 				uint64_t wallMask = 0ULL;
 				for (int qx = 0; qx < 2; ++qx) {
 					for (int qz = 0; qz < 2; ++qz) {
 						float qcx = (bx + 0.25f + qx * 0.5f) * kBlockUnits;
 						float qcy = -(bz + 0.25f + qz * 0.5f) * kBlockUnits;
-						float pdx = qcx - playerPos.x;
-						float pdy = qcy - playerPos.y;
-						// Never spawn a wall quadrant overlapping the player's own cylinder
-						if (pdx * pdx + pdy * pdy < 18.0f * 18.0f) continue;
-
-						auto isQuadBlockedAt = [&](float zTest) -> bool {
-							if (getPointContents && ((getPointContents(m_engineTrace, Vector{qcx, qcy, zTest}, nullptr) & 0xB) != 0)) {
-								return true;
-							}
-							float span = 0.18f * kBlockUnits;
-							Ray_t rayX;
-							rayX.Init(Vector{qcx - span, qcy, zTest}, Vector{qcx + span, qcy, zTest});
-							trace_t trX;
-							std::memset(&trX, 0, sizeof(trX));
-							traceRay(m_engineTrace, rayX, kStaticWorldMask, &filter, &trX);
-							if (trX.startsolid || (trX.fraction < 1.0f && std::abs(trX.plane.normal.z) < 0.45f)) {
-								return true;
-							}
-							Ray_t rayY;
-							rayY.Init(Vector{qcx, qcy - span, zTest}, Vector{qcx, qcy + span, zTest});
-							trace_t trY;
-							std::memset(&trY, 0, sizeof(trY));
-							traceRay(m_engineTrace, rayY, kStaticWorldMask, &filter, &trY);
-							if (trY.startsolid || (trY.fraction < 1.0f && std::abs(trY.plane.normal.z) < 0.45f)) {
-								return true;
-							}
-							return false;
-						};
-
-						if (isQuadBlockedAt(zLow) && isQuadBlockedAt(zMid)) {
+						Ray_t qRay;
+						qRay.InitHull(Vector{qcx, qcy, zWallTest}, Vector{qcx, qcy, zWallTest}, qMins, qMaxs);
+						trace_t qTr;
+						std::memset(&qTr, 0, sizeof(qTr));
+						traceRay(m_engineTrace, qRay, kStaticWorldMask, &filter, &qTr);
+						if (qTr.startsolid) {
 							wallMask |= kQuadMasks[qx][qz];
 						}
 					}
 				}
 
 				if (wallMask != 0ULL) {
-					for (int wy = by + 1; wy <= std::min(by + 2, maxY); ++wy) {
+					for (int wy = by + 1; wy <= std::min(by + 3, maxY); ++wy) {
 						proto::ColBlock wb;
 						wb.x = bx; wb.y = wy; wb.z = bz; wb.pad = 0;
 						for (int l = 0; l < 8; l++) wb.bits[l] = wallMask;
 						blocks.push_back(wb);
 					}
-					continue;
-				}
-
-				// Check for crouch-vents / low overhangs (clear at floorZ + 30, solid at floorZ + 52)
-				float zVent = floorZ + 52.0f;
-				bool blockedVent = getPointContents && ((getPointContents(m_engineTrace, Vector{cx, cy, zVent}, nullptr) & 0xB) != 0);
-				if (blockedVent && by + 2 <= maxY) {
-					int ceilStartLayer = (sub + 1 + 13) - 16; // in block by + 2
-					if (ceilStartLayer < 0) ceilStartLayer = 0;
-					proto::ColBlock ventCeil;
-					ventCeil.x = bx; ventCeil.y = by + 2; ventCeil.z = bz; ventCeil.pad = 0;
-					for (int l = 0; l < 8; l++) {
-						ventCeil.bits[l] = (l >= ceilStartLayer) ? 0xFFFFFFFFFFFFFFFFULL : 0ULL;
+				} else {
+					// Check for crouch-vents / low overhangs (clear at knee height, solid at floorZ + 52)
+					float zVent = floorZ + 52.0f;
+					bool blockedVent = getPointContents && ((getPointContents(m_engineTrace, Vector{cx, cy, zVent}, nullptr) & kSolidContentsMask) != 0);
+					if (blockedVent && by + 2 <= maxY) {
+						int ceilStartLayer = (sub + 1 + 13) - 16; // in block by + 2
+						if (ceilStartLayer < 0) ceilStartLayer = 0;
+						proto::ColBlock ventCeil;
+						ventCeil.x = bx; ventCeil.y = by + 2; ventCeil.z = bz; ventCeil.pad = 0;
+						for (int l = 0; l < 8; l++) {
+							ventCeil.bits[l] = (l >= ceilStartLayer) ? 0xFFFFFFFFFFFFFFFFULL : 0ULL;
+						}
+						blocks.push_back(ventCeil);
 					}
-					blocks.push_back(ventCeil);
 				}
 
-				// Check higher ceilings (by + 3, by + 4) so jumping/flying hits ceilings without blocking 72-unit doorways
-				for (int wy = by + 3; wy <= std::min(by + 4, maxY); ++wy) {
+				// Check higher ceilings and walls at the player's current altitude (when jumping, pillaring upwards, or flying with Elytra)
+				int highStart = by + 3;
+				int highEnd = std::min(std::max(by + 4, playerBy + 2), maxY);
+				for (int wy = highStart; wy <= highEnd; ++wy) {
 					float cz = (wy + 0.5f - (float)kYOffset) * kBlockUnits;
-					if (getPointContents && ((getPointContents(m_engineTrace, Vector{cx, cy, cz}, nullptr) & 0xB) != 0)) {
+					if (wy >= playerBy - 1 && wy <= playerBy + 2 && playerBy > by + 2) {
+						uint64_t highMask = 0ULL;
+						for (int qx = 0; qx < 2; ++qx) {
+							for (int qz = 0; qz < 2; ++qz) {
+								float qcx = (bx + 0.25f + qx * 0.5f) * kBlockUnits;
+								float qcy = -(bz + 0.25f + qz * 0.5f) * kBlockUnits;
+								Ray_t qRay;
+								qRay.InitHull(Vector{qcx, qcy, cz}, Vector{qcx, qcy, cz}, qMins, qMaxs);
+								trace_t qTr;
+								std::memset(&qTr, 0, sizeof(qTr));
+								traceRay(m_engineTrace, qRay, kStaticWorldMask, &filter, &qTr);
+								if (qTr.startsolid) {
+									highMask |= kQuadMasks[qx][qz];
+								}
+							}
+						}
+						if (highMask != 0ULL) {
+							proto::ColBlock cb;
+							cb.x = bx; cb.y = wy; cb.z = bz; cb.pad = 0;
+							for (int l = 0; l < 8; l++) cb.bits[l] = highMask;
+							blocks.push_back(cb);
+						}
+					} else if (getPointContents && ((getPointContents(m_engineTrace, Vector{cx, cy, cz}, nullptr) & kSolidContentsMask) != 0)) {
 						proto::ColBlock cb;
 						cb.x = bx; cb.y = wy; cb.z = bz; cb.pad = 0;
 						for (int l = 0; l < 8; l++) cb.bits[l] = 0xFFFFFFFFFFFFFFFFULL;
