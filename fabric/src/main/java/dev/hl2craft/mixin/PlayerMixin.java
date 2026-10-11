@@ -68,7 +68,10 @@ public abstract class PlayerMixin {
 				} else {
 					sp.setYRot(snap.yaw());
 					sp.setXRot(snap.pitch());
-					if (snap.onLadder() || sp.isFallFlying() || sp.getAbilities().flying) {
+					if (sp.isFallFlying() || sp.getAbilities().flying) {
+						sp.setOnGround(false);
+						sp.fallDistance = 0.0f;
+					} else if (snap.onLadder()) {
 						sp.fallDistance = 0.0f;
 					}
 				}

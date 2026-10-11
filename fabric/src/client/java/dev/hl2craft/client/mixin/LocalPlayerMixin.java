@@ -78,7 +78,7 @@ abstract class LocalPlayerMixin {
 			return;
 		}
 
-		if (!self.getAbilities().flying && !self.isFallFlying()) {
+		if (!self.getAbilities().flying && !self.isFallFlying() && self.onGround() && self.getDeltaMovement().y <= 0.01) {
 			double hostFeetY = snap.y() - self.getEyeHeight();
 			double floorTopY = dev.hl2craft.world.HL2Collision.ensurePlayerFloorAndStep(self.getX(), self.getY(), self.getZ(), hostFeetY);
 			if (!Double.isNaN(floorTopY) && floorTopY > self.getY() + 0.005 && floorTopY <= self.getY() + 0.68) {
@@ -90,7 +90,7 @@ abstract class LocalPlayerMixin {
 						self.setDeltaMovement(dm.x, 0.0, dm.z);
 					}
 				}
-			} else if (self.horizontalCollision && self.onGround() && self.input != null) {
+			} else if (self.horizontalCollision && self.input != null) {
 				Vec3 moveVec = self.getLookAngle();
 				double len = Math.hypot(moveVec.x, moveVec.z);
 				if (len > 1.0e-4 && (self.input.keyPresses.forward() || self.input.keyPresses.backward() || self.input.keyPresses.left() || self.input.keyPresses.right())) {

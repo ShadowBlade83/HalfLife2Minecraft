@@ -1047,9 +1047,30 @@ namespace hl2craft
 		constexpr float kBlockUnits = (float)proto::kUnitsPerBlock;
 
 		constexpr double kYOffset = 64.0;
+		constexpr unsigned int kStaticWorldMask = 0x200400B; // MASK_SOLID (brushes, static props, grates, windows)
+
+		g_inTrace = true;
+		if (setjmp(g_traceJmp) != 0) {
+			g_inTrace = false;
+			return; // Safely handled any engine trace exception
+		}
+
+		// Anchor floor scan to the actual ground below the player's legs (never above ceiling when jumping/flying)
+		float baseFloorZ = playerPos.z;
+		{
+			Ray_t downRay;
+			downRay.Init(Vector{playerPos.x, playerPos.y, playerPos.z + 18.0f}, Vector{playerPos.x, playerPos.y, playerPos.z - 2000.0f});
+			trace_t downTr;
+			std::memset(&downTr, 0, sizeof(downTr));
+			traceRay(m_engineTrace, downRay, kStaticWorldMask, &filter, &downTr);
+			if (downTr.fraction < 1.0f && !downTr.startsolid) {
+				baseFloorZ = downTr.endpos.z;
+			}
+		}
+
 		int centerBx = (int)std::floor(playerPos.x * proto::kMetersPerUnit);
 		int centerBz = (int)std::floor(-playerPos.y * proto::kMetersPerUnit);
-		int centerBy = (int)std::floor((playerPos.z * proto::kMetersPerUnit) + kYOffset);
+		int centerBy = (int)std::floor((baseFloorZ * proto::kMetersPerUnit) + kYOffset);
 
 		int minX = centerBx - r, maxX = centerBx + r;
 		int minZ = centerBz - r, maxZ = centerBz + r;
@@ -1069,15 +1090,7 @@ namespace hl2craft
 			}
 		}
 
-		g_inTrace = true;
-		if (setjmp(g_traceJmp) != 0) {
-			g_inTrace = false;
-			return; // Safely handled any engine trace exception
-		}
-
-		constexpr unsigned int kStaticWorldMask = 0x200400B; // MASK_SOLID (brushes, static props, grates, windows)
-
-		// Pass 1: Floor & slope detection (with 8x8x8 micro-stair sub-voxels on sloped surfaces)
+		// Pass 1: Floor & slope detection (only step ray origin up when lower point is continuously solid)
 		for (int ix = 0; ix < gridSize; ix++) {
 			int bx = minX + ix;
 			for (int iz = 0; iz < gridSize; iz++) {
@@ -1085,23 +1098,23 @@ namespace hl2craft
 
 				float hx = (bx + 0.5f) * kBlockUnits;
 				float hy = -(bz + 0.5f) * kBlockUnits;
-				float hzStart = playerPos.z + 44.0f;
-				float hzEnd = playerPos.z - 420.0f;
+				float hzStart = baseFloorZ + 18.0f;
+				float hzEnd = baseFloorZ - 420.0f;
+
+				// Only raise hzStart if the lower point is inside solid geometry (stairs/slopes/crates), NEVER across open air into a ceiling/lintel
+				if (getPointContents && (getPointContents(m_engineTrace, Vector{hx, hy, hzStart}, nullptr) & 0xB) != 0) {
+					if ((getPointContents(m_engineTrace, Vector{hx, hy, baseFloorZ + 34.0f}, nullptr) & 0xB) == 0) {
+						hzStart = baseFloorZ + 34.0f;
+					} else if ((getPointContents(m_engineTrace, Vector{hx, hy, baseFloorZ + 48.0f}, nullptr) & 0xB) == 0) {
+						hzStart = baseFloorZ + 48.0f;
+					}
+				}
 
 				Ray_t ray;
 				ray.Init(Vector{hx, hy, hzStart}, Vector{hx, hy, hzEnd});
 				trace_t tr;
 				std::memset(&tr, 0, sizeof(tr));
 				traceRay(m_engineTrace, ray, kStaticWorldMask, &filter, &tr);
-
-				if (tr.startsolid) {
-					float hzHigh = playerPos.z + 82.0f;
-					if (!getPointContents || (getPointContents(m_engineTrace, Vector{hx, hy, hzHigh}, nullptr) & 0xB) == 0) {
-						ray.Init(Vector{hx, hy, hzHigh}, Vector{hx, hy, hzEnd});
-						std::memset(&tr, 0, sizeof(tr));
-						traceRay(m_engineTrace, ray, kStaticWorldMask, &filter, &tr);
-					}
-				}
 
 				if (tr.fraction < 1.0f && !tr.startsolid) {
 					float floorZ = tr.endpos.z;
@@ -1181,7 +1194,12 @@ namespace hl2craft
 			}
 		}
 
-		// Pass 2: Walls, fences, closed doors, crouch-vents, and ceilings
+		static const uint64_t kQuadMasks[2][2] = {
+			{ 0x000000000F0F0F0FULL, 0x0F0F0F0F00000000ULL },
+			{ 0x00000000F0F0F0F0ULL, 0xF0F0F0F000000000ULL }
+		};
+
+		// Pass 2: Half-block (2x2 quadrant) walls, fences, closed doors, crouch-vents, and ceilings
 		for (int ix = 0; ix < gridSize; ix++) {
 			int bx = minX + ix;
 			for (int iz = 0; iz < gridSize; iz++) {
@@ -1191,13 +1209,25 @@ namespace hl2craft
 				float cy = -(bz + 0.5f) * kBlockUnits;
 
 				if (by == -9999) {
-					// No floor found (e.g. inside a thick wall brush): check point contents around player height
-					for (int wy = centerBy - 1; wy <= centerBy + 2; wy++) {
-						float cz = (wy + 0.5f - (float)kYOffset) * kBlockUnits;
-						if (getPointContents && ((getPointContents(m_engineTrace, Vector{cx, cy, cz}, nullptr) & 0xB) != 0)) {
+					uint64_t solidMask = 0ULL;
+					float testZ = baseFloorZ + 36.0f;
+					for (int qx = 0; qx < 2; ++qx) {
+						for (int qz = 0; qz < 2; ++qz) {
+							float qcx = (bx + 0.25f + qx * 0.5f) * kBlockUnits;
+							float qcy = -(bz + 0.25f + qz * 0.5f) * kBlockUnits;
+							float pdx = qcx - playerPos.x;
+							float pdy = qcy - playerPos.y;
+							if (pdx * pdx + pdy * pdy < 18.0f * 18.0f) continue;
+							if (getPointContents && ((getPointContents(m_engineTrace, Vector{qcx, qcy, testZ}, nullptr) & 0xB) != 0)) {
+								solidMask |= kQuadMasks[qx][qz];
+							}
+						}
+					}
+					if (solidMask != 0ULL) {
+						for (int wy = centerBy; wy <= centerBy + 2; wy++) {
 							proto::ColBlock wb;
 							wb.x = bx; wb.y = wy; wb.z = bz; wb.pad = 0;
-							for (int l = 0; l < 8; l++) wb.bits[l] = 0xFFFFFFFFFFFFFFFFULL;
+							for (int l = 0; l < 8; l++) wb.bits[l] = solidMask;
 							blocks.push_back(wb);
 						}
 					}
@@ -1206,69 +1236,63 @@ namespace hl2craft
 
 				float floorZ = floorZGrid[ix][iz];
 				int sub = floorSubGrid[ix][iz];
+				float zLow = floorZ + 30.0f;
+				float zMid = floorZ + 52.0f;
 
-				// Check knee/waist height (floorZ + 28 units, well above 18-unit stairs) for walls/fences/props
-				float zLow = floorZ + 28.0f;
-				bool blockedLow = getPointContents && ((getPointContents(m_engineTrace, Vector{cx, cy, zLow}, nullptr) & 0xB) != 0);
-				if (!blockedLow) {
-					Ray_t rayX;
-					rayX.Init(Vector{(bx + 0.08f) * kBlockUnits, cy, zLow}, Vector{(bx + 0.92f) * kBlockUnits, cy, zLow});
-					trace_t trX;
-					std::memset(&trX, 0, sizeof(trX));
-					traceRay(m_engineTrace, rayX, kStaticWorldMask, &filter, &trX);
-					if (trX.startsolid || (trX.fraction < 1.0f && std::abs(trX.plane.normal.z) < 0.55f)) {
-						blockedLow = true;
-					} else {
-						Ray_t rayY;
-						rayY.Init(Vector{cx, -(bz + 0.08f) * kBlockUnits, zLow}, Vector{cx, -(bz + 0.92f) * kBlockUnits, zLow});
-						trace_t trY;
-						std::memset(&trY, 0, sizeof(trY));
-						traceRay(m_engineTrace, rayY, kStaticWorldMask, &filter, &trY);
-						if (trY.startsolid || (trY.fraction < 1.0f && std::abs(trY.plane.normal.z) < 0.55f)) {
-							blockedLow = true;
-						}
-					}
-				}
+				uint64_t wallMask = 0ULL;
+				for (int qx = 0; qx < 2; ++qx) {
+					for (int qz = 0; qz < 2; ++qz) {
+						float qcx = (bx + 0.25f + qx * 0.5f) * kBlockUnits;
+						float qcy = -(bz + 0.25f + qz * 0.5f) * kBlockUnits;
+						float pdx = qcx - playerPos.x;
+						float pdy = qcy - playerPos.y;
+						// Never spawn a wall quadrant overlapping the player's own cylinder
+						if (pdx * pdx + pdy * pdy < 18.0f * 18.0f) continue;
 
-				// If a neighbor has a walkable floor within step/slope range, don't let the slope edge trigger a false wall
-				if (blockedLow) {
-					float zMid = floorZ + 48.0f;
-					bool blockedMid = getPointContents && ((getPointContents(m_engineTrace, Vector{cx, cy, zMid}, nullptr) & 0xB) != 0);
-					if (!blockedMid) {
-						Ray_t rayX;
-						rayX.Init(Vector{(bx + 0.08f) * kBlockUnits, cy, zMid}, Vector{(bx + 0.92f) * kBlockUnits, cy, zMid});
-						trace_t trX;
-						std::memset(&trX, 0, sizeof(trX));
-						traceRay(m_engineTrace, rayX, kStaticWorldMask, &filter, &trX);
-						if (trX.startsolid || (trX.fraction < 1.0f && std::abs(trX.plane.normal.z) < 0.55f)) {
-							blockedMid = true;
-						} else {
+						auto isQuadBlockedAt = [&](float zTest) -> bool {
+							if (getPointContents && ((getPointContents(m_engineTrace, Vector{qcx, qcy, zTest}, nullptr) & 0xB) != 0)) {
+								return true;
+							}
+							float span = 0.18f * kBlockUnits;
+							Ray_t rayX;
+							rayX.Init(Vector{qcx - span, qcy, zTest}, Vector{qcx + span, qcy, zTest});
+							trace_t trX;
+							std::memset(&trX, 0, sizeof(trX));
+							traceRay(m_engineTrace, rayX, kStaticWorldMask, &filter, &trX);
+							if (trX.startsolid || (trX.fraction < 1.0f && std::abs(trX.plane.normal.z) < 0.45f)) {
+								return true;
+							}
 							Ray_t rayY;
-							rayY.Init(Vector{cx, -(bz + 0.08f) * kBlockUnits, zMid}, Vector{cx, -(bz + 0.92f) * kBlockUnits, zMid});
+							rayY.Init(Vector{qcx, qcy - span, zTest}, Vector{qcx, qcy + span, zTest});
 							trace_t trY;
 							std::memset(&trY, 0, sizeof(trY));
 							traceRay(m_engineTrace, rayY, kStaticWorldMask, &filter, &trY);
-							if (trY.startsolid || (trY.fraction < 1.0f && std::abs(trY.plane.normal.z) < 0.55f)) {
-								blockedMid = true;
+							if (trY.startsolid || (trY.fraction < 1.0f && std::abs(trY.plane.normal.z) < 0.45f)) {
+								return true;
 							}
+							return false;
+						};
+
+						if (isQuadBlockedAt(zLow) && isQuadBlockedAt(zMid)) {
+							wallMask |= kQuadMasks[qx][qz];
 						}
-					}
-					if (blockedMid) {
-						for (int wy = by + 1; wy <= std::min(by + 2, maxY); ++wy) {
-							proto::ColBlock wb;
-							wb.x = bx; wb.y = wy; wb.z = bz; wb.pad = 0;
-							for (int l = 0; l < 8; l++) wb.bits[l] = 0xFFFFFFFFFFFFFFFFULL;
-							blocks.push_back(wb);
-						}
-						continue;
 					}
 				}
 
-				// Check for crouch-vents / low overhangs (clear at floorZ + 24, solid at floorZ + 52)
+				if (wallMask != 0ULL) {
+					for (int wy = by + 1; wy <= std::min(by + 2, maxY); ++wy) {
+						proto::ColBlock wb;
+						wb.x = bx; wb.y = wy; wb.z = bz; wb.pad = 0;
+						for (int l = 0; l < 8; l++) wb.bits[l] = wallMask;
+						blocks.push_back(wb);
+					}
+					continue;
+				}
+
+				// Check for crouch-vents / low overhangs (clear at floorZ + 30, solid at floorZ + 52)
 				float zVent = floorZ + 52.0f;
 				bool blockedVent = getPointContents && ((getPointContents(m_engineTrace, Vector{cx, cy, zVent}, nullptr) & 0xB) != 0);
 				if (blockedVent && by + 2 <= maxY) {
-					// Place a ceiling starting 13 eighth-layers (1.625 blocks) above the floor so standing (1.8) is blocked and sneaking (1.5) fits
 					int ceilStartLayer = (sub + 1 + 13) - 16; // in block by + 2
 					if (ceilStartLayer < 0) ceilStartLayer = 0;
 					proto::ColBlock ventCeil;

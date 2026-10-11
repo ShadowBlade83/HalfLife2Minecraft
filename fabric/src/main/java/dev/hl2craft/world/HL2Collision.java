@@ -299,19 +299,16 @@ public final class HL2Collision {
 	public static double ensurePlayerFloorAndStep(double px, double py, double pz, double fallbackFloorY) {
 		int bx = (int) Math.floor(px);
 		int bz = (int) Math.floor(pz);
-		int fallbackBy = (int) Math.floor(fallbackFloorY - 0.15);
-		long centerChunk = colKey(bx >> 4, bz >> 4);
-		int chunkFy = CHUNK_FLOOR_Y.getOrDefault(centerChunk, fallbackBy);
 
-		for (int dx = -1; dx <= 1; dx++) {
-			for (int dz = -1; dz <= 1; dz++) {
-				int cx = bx + dx;
-				int cz = bz + dz;
-				long col = colKey(cx, cz);
-				if (!COLUMN_FLOOR_Y.containsKey(col)) {
-					COLUMN_FLOOR_Y.put(col, chunkFy);
-					SHAPES.putIfAbsent(BlockPos.asLong(cx, chunkFy, cz), Shapes.block());
-					SHAPES.putIfAbsent(BlockPos.asLong(cx, chunkFy - 1, cz), Shapes.block());
+		// Only create temporary bootstrap floor before the very first HL2 ScanCollision arrives
+		if (SHAPES.isEmpty()) {
+			int fallbackBy = (int) Math.floor(fallbackFloorY - 0.15);
+			for (int dx = -1; dx <= 1; dx++) {
+				for (int dz = -1; dz <= 1; dz++) {
+					int cx = bx + dx;
+					int cz = bz + dz;
+					SHAPES.putIfAbsent(BlockPos.asLong(cx, fallbackBy, cz), Shapes.block());
+					SHAPES.putIfAbsent(BlockPos.asLong(cx, fallbackBy - 1, cz), Shapes.block());
 				}
 			}
 		}

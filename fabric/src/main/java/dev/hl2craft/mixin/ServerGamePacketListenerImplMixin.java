@@ -34,8 +34,11 @@ public abstract class ServerGamePacketListenerImplMixin {
 			this.player.setYRot(yaw);
 			this.player.setXRot(pitch);
 			this.player.setDeltaMovement(Vec3.ZERO);
-			this.player.setOnGround(true);
-			this.player.fallDistance = 0.0f;
+			boolean onGround = packet.isOnGround() && !this.player.isFallFlying() && !this.player.getAbilities().flying;
+			this.player.setOnGround(onGround);
+			if (onGround || this.player.isFallFlying() || this.player.getAbilities().flying) {
+				this.player.fallDistance = 0.0f;
+			}
 			((net.minecraft.server.level.ServerLevel) this.player.level()).getChunkSource().move(this.player);
 			this.resetPosition();
 			ci.cancel();
