@@ -1,4 +1,4 @@
-﻿#include "hl2_bridge.h"
+#include "hl2_bridge.h"
 #include "d3d9_render.h"
 #include <cstring>
 #include <setjmp.h>
@@ -1813,21 +1813,6 @@ namespace hl2craft
 						bool isOnFire = (ev->flags & 4) != 0;
 						int dmgType = isOnFire ? 8 : (isCrit ? 64 : 128); // 8: DMG_BURN, 64: DMG_BLAST, 128: DMG_CLUB
 
-						if (isOnFire) {
-							HMODULE hServer = GetModuleHandleA("server.dll");
-							if (hServer && targetEnt > 0 && targetEnt < 4096) {
-								char *pEntList = (char*)hServer + 0x6A74C0;
-								if (!IsBadReadPtr(pEntList, 0x10000)) {
-									void *pServerEnt = *(void**)(pEntList + 4 + targetEnt * 16);
-									if (pServerEnt && !IsBadReadPtr(pServerEnt, sizeof(void*))) {
-										typedef int (__cdecl *CreateEntityFlameFn)(void*, char);
-										CreateEntityFlameFn createFlame = (CreateEntityFlameFn)((char*)hServer + 0x15B770);
-										createFlame(pServerEnt, 1);
-									}
-								}
-							}
-						}
-
 						char cmd[384];
 						snprintf(cmd, sizeof(cmd),
 							"ent_create point_hurt targetname mc_hrt_%u; "
@@ -2248,11 +2233,12 @@ namespace hl2craft
 	{
 		if (entIndex <= 1) return;
 		DWORD now = GetTickCount();
-		DWORD flashDuration = 360;
+		DWORD flashDuration = 320;
 
 		bool updated = false;
 		for (auto &kb : m_knockbacks) {
 			if (kb.entIndex == entIndex) {
+				kb.lastPos = entPos;
 				kb.startMs = now;
 				kb.flashEndMs = now + flashDuration;
 				kb.isCrit = isCrit;
@@ -2264,7 +2250,7 @@ namespace hl2craft
 			if (m_knockbacks.size() >= 24) {
 				m_knockbacks.erase(m_knockbacks.begin());
 			}
-			m_knockbacks.push_back(ActiveKnockback{ entIndex, now, now + flashDuration, isCrit });
+			m_knockbacks.push_back(ActiveKnockback{ entIndex, entPos, now, now + flashDuration, isCrit });
 		}
 
 		// Apply red damage flash immediately to client entity render color (+0x58)
@@ -2283,27 +2269,28 @@ namespace hl2craft
 		float len = std::sqrt(dir.x * dir.x + dir.y * dir.y);
 		if (len > 1e-4f) {
 			Vector nDir{ dir.x / len, dir.y / len, 0.0f };
-			float speed = isCrit ? 260.0f : 190.0f;
-			if (strength > 0.8f) speed *= 1.25f;
-			float zBoost = isCrit ? 75.0f : 45.0f;
-			Vector impulse{ nDir.x * speed, nDir.y * speed, zBoost };
+			static uint32_t s_pushCounter = 0;
+			uint32_t pushId = ++s_pushCounter;
+			Vector pushPos{
+				entPos.x - nDir.x * 20.0f,
+				entPos.y - nDir.y * 20.0f,
+				entPos.z + 16.0f
+			};
+			int mag = isCrit ? 60 : 42;
+			if (strength > 0.8f) mag = (int)(mag * 1.25f);
 
-			HMODULE hServer = GetModuleHandleA("server.dll");
-			if (hServer) {
-				char *pEntList = (char*)hServer + 0x6A74C0;
-				if (!IsBadReadPtr(pEntList, 0x10000)) {
-					void *pServerEnt = *(void**)(pEntList + 4 + entIndex * 16);
-					if (pServerEnt && !IsBadReadPtr(pServerEnt, sizeof(void*))) {
-						typedef void (__thiscall *ApplyAbsVelocityImpulseFn)(void*, const Vector&);
-						ApplyAbsVelocityImpulseFn applyImpulse = (ApplyAbsVelocityImpulseFn)((char*)hServer + 0x113E70);
-						applyImpulse(pServerEnt, impulse);
-
-						if (!IsBadReadPtr((char*)pServerEnt + 0x214, sizeof(Vector))) {
-							*(Vector*)((char*)pServerEnt + 0x208) = impulse;
-						}
-					}
-				}
-			}
+			char cmd[320];
+			snprintf(cmd, sizeof(cmd),
+				"ent_create point_push targetname mc_kbp_%u; "
+				"ent_fire mc_kbp_%u addoutput \"origin %.2f %.2f %.2f\"; "
+				"ent_fire mc_kbp_%u addoutput \"magnitude %d\"; "
+				"ent_fire mc_kbp_%u addoutput \"radius 48\"; "
+				"ent_fire mc_kbp_%u addoutput \"spawnflags 8\"; "
+				"ent_fire mc_kbp_%u Enable; "
+				"ent_fire mc_kbp_%u Kill \"\" 0.05",
+				pushId, pushId, pushPos.x, pushPos.y, pushPos.z,
+				pushId, mag, pushId, pushId, pushId, pushId);
+			ExecCmd(cmd);
 
 			if (isCrit) {
 				static uint32_t s_critSparkCounter = 0;
@@ -2359,6 +2346,34 @@ namespace hl2craft
 					clr[3] = 255;
 				}
 				if (isDead) {
+					typedef int (__thiscall *GetHighestEntityIndexFn)(void*);
+					GetHighestEntityIndexFn getHighest = (GetHighestEntityIndexFn)evt[6];
+					int maxEnts = getHighest ? getHighest(m_entityList) : 256;
+					if (maxEnts > 2048) maxEnts = 2048;
+					for (int i = 1; i <= maxEnts; ++i) {
+						void *ent = getClientEnt(m_entityList, i);
+						if (ent && ent != pPlayerEnt && !IsBadReadPtr((char*)ent + 0x5C, 4)) {
+							uint8_t *clr = (uint8_t*)ent + 0x58;
+							if (clr[0] == 255 && (clr[1] < 255 || clr[2] < 255)) {
+								void *r = (char*)ent + 4;
+								if (!IsBadReadPtr(r, sizeof(void*))) {
+									void **rv = *(void***)r;
+									if (!IsBadReadPtr(rv, sizeof(void*) * 2)) {
+										typedef const float* (__thiscall *GetOriginFn)(void*);
+										const float *org = ((GetOriginFn)rv[1])(r);
+										if (org && !IsBadReadPtr(org, sizeof(float) * 3)) {
+											float dx = org[0] - it->lastPos.x;
+											float dy = org[1] - it->lastPos.y;
+											float dz = org[2] - it->lastPos.z;
+											if (dx*dx + dy*dy + dz*dz < 200.0f * 200.0f) {
+												clr[0] = 255; clr[1] = 255; clr[2] = 255; clr[3] = 255;
+											}
+										}
+									}
+								}
+							}
+						}
+					}
 					ExecCmd("ent_fire prop_ragdoll* Color \"255 255 255\"; ent_fire prop_ragdoll* addoutput \"rendercolor 255 255 255\";");
 				}
 				it = m_knockbacks.erase(it);
@@ -2369,8 +2384,8 @@ namespace hl2craft
 			DWORD elapsedFlash = now - it->startMs;
 			uint8_t baseGb = it->isCrit ? 40 : 62;
 			uint8_t curGb = baseGb;
-			if (elapsedFlash > 240) {
-				float fadeT = std::clamp((float)(elapsedFlash - 240) / 120.0f, 0.0f, 1.0f);
+			if (elapsedFlash > 200) {
+				float fadeT = std::clamp((float)(elapsedFlash - 200) / 120.0f, 0.0f, 1.0f);
 				curGb = (uint8_t)std::round(baseGb + (255.0f - baseGb) * fadeT);
 			}
 			if (validClientEnt) {

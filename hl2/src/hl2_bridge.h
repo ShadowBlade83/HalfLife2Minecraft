@@ -186,6 +186,7 @@ namespace hl2craft
 
 		struct ActiveKnockback {
 			int entIndex;
+			Vector lastPos;
 			DWORD startMs;
 			DWORD flashEndMs;
 			bool isCrit;

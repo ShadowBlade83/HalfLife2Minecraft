@@ -21,13 +21,41 @@ public abstract class PlayerMixin {
 	@Inject(method = "tick", at = @At("HEAD"))
 	private void hl2craft$syncServerGameMode(CallbackInfo ci) {
 		Player self = (Player) (Object) this;
-		if (!HL2Link.active() || self.level().isClientSide()) {
+		if (self.level().isClientSide()) {
+			return;
+		}
+
+		if (!HL2Link.active()) {
+			self.setDeltaMovement(net.minecraft.world.phys.Vec3.ZERO);
+			self.fallDistance = 0.0f;
+			if (self.getY() < 64.0) {
+				self.setPos(self.getX(), 64.0, self.getZ());
+			}
+			self.xo = self.xOld = self.getX();
+			self.yo = self.yOld = self.getY();
+			self.zo = self.zOld = self.getZ();
+			if (self instanceof net.minecraft.server.level.ServerPlayer sp && sp.connection != null) {
+				sp.connection.resetPosition();
+			}
 			return;
 		}
 
 		if (self instanceof net.minecraft.server.level.ServerPlayer sp) {
 			HL2Link.HostSnapshot snap = HL2Link.readHost();
-			if (snap != null && snap.inPlayable()) {
+			if (snap == null || !snap.inPlayable()) {
+				sp.setDeltaMovement(net.minecraft.world.phys.Vec3.ZERO);
+				sp.fallDistance = 0.0f;
+				if (sp.getY() < 64.0) {
+					sp.setPos(sp.getX(), 64.0, sp.getZ());
+				}
+				sp.xo = sp.xOld = sp.getX();
+				sp.yo = sp.yOld = sp.getY();
+				sp.zo = sp.zOld = sp.getZ();
+				if (sp.connection != null) {
+					sp.connection.resetPosition();
+				}
+				return;
+			}
 				if (lastCollisionEpoch != -1 && snap.epoch() != lastCollisionEpoch) {
 					dev.hl2craft.world.HL2Collision.clearAllPlacedBlocks((net.minecraft.server.level.ServerLevel) sp.level());
 					dev.hl2craft.world.HL2Collision.clearAllEntities((net.minecraft.server.level.ServerLevel) sp.level());
@@ -86,7 +114,6 @@ public abstract class PlayerMixin {
 				if (sp.connection != null) {
 					sp.connection.resetPosition();
 				}
-			}
 		}
 	}
 
@@ -116,7 +143,13 @@ public abstract class PlayerMixin {
 
 	@Inject(method = "hurtServer", at = @At("HEAD"), cancellable = true)
 	private void hl2craft$cancelSuffocation(net.minecraft.server.level.ServerLevel level, net.minecraft.world.damagesource.DamageSource source, float amount, org.spongepowered.asm.mixin.injection.callback.CallbackInfoReturnable<Boolean> cir) {
-		if (HL2Link.active() && (source.is(net.minecraft.world.damagesource.DamageTypes.IN_WALL) || source.is(net.minecraft.world.damagesource.DamageTypes.FALL))) {
+		if (!HL2Link.active() || lastCollisionEpoch == -1) {
+			cir.setReturnValue(false);
+			return;
+		}
+		if (source.is(net.minecraft.world.damagesource.DamageTypes.IN_WALL)
+				|| source.is(net.minecraft.world.damagesource.DamageTypes.FALL)
+				|| source.is(net.minecraft.world.damagesource.DamageTypes.FELL_OUT_OF_WORLD)) {
 			cir.setReturnValue(false);
 		}
 	}
