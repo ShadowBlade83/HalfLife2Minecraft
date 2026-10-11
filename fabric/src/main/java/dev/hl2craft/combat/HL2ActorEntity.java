@@ -43,6 +43,21 @@ public class HL2ActorEntity extends LivingEntity {
 	}
 
 	@Override
+	public boolean canBeSeenAsEnemy() {
+		return this.isAlive();
+	}
+
+	@Override
+	public boolean canBeSeenByAnyone() {
+		return true;
+	}
+
+	@Override
+	public boolean isAttackable() {
+		return true;
+	}
+
+	@Override
 	public boolean isInvisible() {
 		return false;
 	}
@@ -86,7 +101,12 @@ public class HL2ActorEntity extends LivingEntity {
 
 	@Override
 	protected EntityDimensions getDefaultDimensions(Pose pose) {
-		return EntityDimensions.scalable(this.entityData.get(WIDTH), this.entityData.get(HEIGHT));
+		float w = this.entityData.get(WIDTH);
+		float h = this.entityData.get(HEIGHT);
+		if (w <= 0.01F) w = 0.6F;
+		if (h <= 0.01F) h = 1.8F;
+		float eye = (h >= 1.5F) ? 1.62F : Math.max(0.2F, h * 0.85F);
+		return EntityDimensions.scalable(w, h).withEyeHeight(eye);
 	}
 
 	@Override

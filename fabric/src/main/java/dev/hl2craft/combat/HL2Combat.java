@@ -107,11 +107,16 @@ public final class HL2Combat {
 		}
 		for (HL2Link.Actor a : live.values()) {
 			HL2ActorEntity proxy = PROXIES.get(a.entIndex());
+			double targetY = a.y();
+			double floorY = dev.hl2craft.world.HL2Collision.ensurePlayerFloorAndStep(a.x(), a.y(), a.z(), a.y());
+			if (!Double.isNaN(floorY) && Math.abs(a.y() - floorY) < 0.6) {
+				targetY = Math.max(a.y(), floorY) + 0.02;
+			}
 			if (proxy == null) {
 				proxy = new HL2ActorEntity(HL2_ACTOR, level);
 				proxy.setEntIndex(a.entIndex());
 				proxy.setSize(a.width(), a.height());
-				proxy.snapTo(a.x(), a.y(), a.z(), a.yaw(), 0.0F);
+				proxy.snapTo(a.x(), targetY, a.z(), a.yaw(), 0.0F);
 				proxy.setCustomNameVisible(false);
 				if (!level.addFreshEntity(proxy)) {
 					continue;
@@ -120,7 +125,7 @@ public final class HL2Combat {
 				continue;
 			}
 			proxy.setSize(a.width(), a.height());
-			proxy.setPos(a.x(), a.y(), a.z());
+			proxy.setPos(a.x(), targetY, a.z());
 			proxy.setYRot(a.yaw());
 			proxy.setYHeadRot(a.yaw());
 		}

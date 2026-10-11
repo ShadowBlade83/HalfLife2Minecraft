@@ -1675,6 +1675,8 @@ namespace hl2craft
 				w = 0.7f; h = 1.9f;
 			} else if (strstr(className, "AntlionGuard")) {
 				w = 2.0f; h = 2.5f;
+			} else if (strstr(className, "Scanner") || strstr(className, "Manhack")) {
+				w = 0.5f; h = 0.5f;
 			}
 			rec.width = w;
 			rec.height = h;
